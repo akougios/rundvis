@@ -17,25 +17,22 @@
   .font-display { font-family: 'Fraunces', serif; }
   ::-webkit-scrollbar { height: 6px; width: 6px; }
   ::-webkit-scrollbar-thumb { background: #2C3237; border-radius: 3px; }
-  @keyframes kbIn { from { transform: scale(1); } to { transform: scale(1.14); } }
-  @keyframes kbOut { from { transform: scale(1.14); } to { transform: scale(1); } }
-  @keyframes kbPanL { from { transform: scale(1.12) translateX(2.5%); } to { transform: scale(1.12) translateX(-2.5%); } }
-  @keyframes kbPanR { from { transform: scale(1.12) translateX(-2.5%); } to { transform: scale(1.12) translateX(2.5%); } }
-  .kb-in { animation: kbIn 7s ease-in-out forwards; }
-  .kb-out { animation: kbOut 7s ease-in-out forwards; }
-  .kb-pan-l { animation: kbPanL 7s ease-in-out forwards; }
-  .kb-pan-r { animation: kbPanR 7s ease-in-out forwards; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .spin { animation: spin 1s linear infinite; }
+  .kb-img { will-change: transform; transform-origin: center center; filter: saturate(1.08) contrast(1.04); }
+  .kb-fade { opacity: 0; transition: opacity 550ms ease; }
+  .kb-fade.kb-fade-in { opacity: 1; }
+  .vignette { background: radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,0.35) 100%); }
   @media (prefers-reduced-motion: reduce) {
-    .kb-in, .kb-out, .kb-pan-l, .kb-pan-r, .spin { animation: none; }
+    .spin { animation: none; }
+    .kb-img { transform: none !important; }
   }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
-const { useState, useRef, useEffect, useCallback } = React;
+const { useState, useRef, useEffect, useCallback, useMemo } = React;
 
 const INK = "#15191C", SURFACE = "#1D2226", SURFACE_2 = "#242A2E", TEXT = "#F2EFE7",
   MUTED = "#98A0A6", ACCENT = "#3860E8", ACCENT_SOFT = "#293B72", AMBER = "#E3A33D", LINE = "#2C3237";
@@ -48,8 +45,40 @@ const PROPERTY_TYPES = [
   { id: "prisnedsaettelse", label: "Prisnedsættelse", hint: "Tydeligt fokus på ny pris" },
   { id: "aabenthus", label: "Åbent hus", hint: "Dato og tidspunkt fremhævet" },
 ];
-const KEN_BURNS = ["kb-in", "kb-out", "kb-pan-l", "kb-pan-r"];
 const STEPS = [{ id: 1, label: "Boligtype" }, { id: 2, label: "Billeder" }, { id: 3, label: "Manuskript" }, { id: 4, label: "Afspil" }];
+const FALLBACK_SCENE_MS = 6000;
+
+function seededRandom(seed) {
+  const s = Math.sin(seed) * 10000;
+  return s - Math.floor(s);
+}
+function easeInOutSine(t) { return 0.5 - 0.5 * Math.cos(Math.PI * t); }
+
+// Deterministic per-scene camera-move: a mix of zoom in/out and a pan direction,
+// varied by index so consecutive scenes don't all move the same way.
+function kenBurnsParamsFor(index) {
+  const r1 = seededRandom(index * 12.9898 + 3.7);
+  const r2 = seededRandom(index * 78.233 + 1.3);
+  const r3 = seededRandom(index * 37.719 + 2.1);
+  const r4 = seededRandom(index * 5.234 + 4.9);
+  const zoomIn = r1 > 0.5;
+  const scaleAmt = 1.08 + r2 * 0.09; // 1.08 - 1.17
+  const panX = (r3 - 0.5) * 7; // -3.5% .. 3.5%
+  const panY = (r4 - 0.5) * 5; // -2.5% .. 2.5%
+  return {
+    scaleFrom: zoomIn ? 1.02 : scaleAmt,
+    scaleTo: zoomIn ? scaleAmt : 1.02,
+    panX, panY,
+  };
+}
+function applyKenBurns(el, params, t) {
+  if (!el) return;
+  const e = easeInOutSine(Math.max(0, Math.min(1, t)));
+  const scale = params.scaleFrom + (params.scaleTo - params.scaleFrom) * e;
+  const tx = -params.panX / 2 + params.panX * e;
+  const ty = -params.panY / 2 + params.panY * e;
+  el.style.transform = `scale(${scale.toFixed(4)}) translate(${tx.toFixed(2)}%, ${ty.toFixed(2)}%)`;
+}
 
 function Icon({ name, size = 16, className = "", style = {} }) {
   const p = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
@@ -69,6 +98,7 @@ function Icon({ name, size = 16, className = "", style = {} }) {
     case "loader": return <svg {...p} className={"spin " + className}><circle cx="12" cy="12" r="9" strokeDasharray="40 20" /></svg>;
     case "film": return <svg {...p}><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="7" y1="3" x2="7" y2="21" /><line x1="17" y1="3" x2="17" y2="21" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="3" y1="15" x2="21" y2="15" /></svg>;
     case "volume": return <svg {...p}><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M18.5 5.5a9 9 0 0 1 0 13" /></svg>;
+    case "music": return <svg {...p}><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></svg>;
     default: return null;
   }
 }
@@ -89,6 +119,45 @@ function StepPill({ step, active, done, onClick, disabled }) {
   );
 }
 
+// One Ken-Burns-animated image layer. Mounts at opacity 0 and fades in,
+// and continuously updates its own transform via rAF while active.
+function SceneLayer({ src, active, isPlaying, getProgress, kbParams }) {
+  const imgRef = useRef(null);
+  const [faded, setFaded] = useState(false);
+
+  useEffect(() => {
+    setFaded(false);
+    const t = requestAnimationFrame(() => setFaded(true));
+    return () => cancelAnimationFrame(t);
+  }, [src]);
+
+  useEffect(() => {
+    if (!active) return;
+    let raf;
+    const tick = () => {
+      applyKenBurns(imgRef.current, kbParams, getProgress());
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line
+  }, [active, isPlaying, kbParams]);
+
+  useEffect(() => {
+    if (!active) applyKenBurns(imgRef.current, kbParams, 0);
+  }, [active, kbParams]);
+
+  return (
+    <img
+      ref={imgRef}
+      src={src}
+      alt=""
+      className={`kb-img kb-fade absolute inset-0 w-full h-full object-cover ${faded ? "kb-fade-in" : ""}`}
+      style={{ zIndex: active ? 2 : 1 }}
+    />
+  );
+}
+
 function Rundvis() {
   const [step, setStep] = useState(1);
   const [propertyType, setPropertyType] = useState(null);
@@ -99,19 +168,22 @@ function Rundvis() {
   const [scenes, setScenes] = useState([]);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState("");
+
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [voiceReady, setVoiceReady] = useState(false);
-  const fileInputRef = useRef(null);
+  const [prevIndex, setPrevIndex] = useState(null);
+  const [voices, setVoices] = useState([]); // [{status:'idle'|'loading'|'ready'|'error', url, mode:'audio'|'browser'}]
+  const [voicesPreparing, setVoicesPreparing] = useState(false);
+  const [voiceOverallError, setVoiceOverallError] = useState("");
+  const [musicOn, setMusicOn] = useState(false);
 
-  useEffect(() => {
-    if (!("speechSynthesis" in window)) return;
-    const load = () => setVoiceReady(true);
-    load();
-    window.speechSynthesis.onvoiceschanged = load;
-    return () => { window.speechSynthesis.onvoiceschanged = null; };
-  }, []);
-  useEffect(() => () => { if ("speechSynthesis" in window) window.speechSynthesis.cancel(); }, []);
+  const fileInputRef = useRef(null);
+  const audioRef = useRef(null);
+  const sceneStartRef = useRef(0);
+  const audioCtxRef = useRef(null);
+  const musicNodesRef = useRef(null);
+
+  const kbParamsList = useMemo(() => scenes.map((_, i) => kenBurnsParamsFor(i)), [scenes.length]);
 
   const handleFiles = (fileList) => {
     const files = Array.from(fileList).slice(0, 20 - images.length);
@@ -138,13 +210,7 @@ function Rundvis() {
       const response = await fetch("/api/generate-script", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          propertyTypeLabel: typeLabel,
-          address,
-          agentName,
-          notes,
-          sceneCount: images.length,
-        }),
+        body: JSON.stringify({ propertyTypeLabel: typeLabel, address, agentName, notes, sceneCount: images.length }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Ukendt fejl fra serveren.");
@@ -159,35 +225,182 @@ function Rundvis() {
 
   const updateScene = (idx, text) => setScenes((prev) => { const n = [...prev]; n[idx] = { ...n[idx], text }; return n; });
 
-  const speak = useCallback((text, onEnd) => {
-    if (!text || !("speechSynthesis" in window)) { const t = setTimeout(onEnd, 1800); return () => clearTimeout(t); }
-    window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
-    const daVoice = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith("da"));
-    if (daVoice) utter.voice = daVoice;
-    utter.lang = "da-DK"; utter.rate = 0.96;
-    utter.onend = onEnd; utter.onerror = onEnd;
-    window.speechSynthesis.speak(utter);
-    return () => window.speechSynthesis.cancel();
-  }, []);
+  // ---- Voice generation (ElevenLabs, with per-scene browser-TTS fallback) ----
+  const generateVoiceForIndex = async (idx, text) => {
+    try {
+      const res = await fetch("/api/generate-voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error("voice-api-failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      return { status: "ready", url, mode: "audio" };
+    } catch (err) {
+      return { status: "ready", url: null, mode: "browser" };
+    }
+  };
+
+  const prepareVoices = useCallback(async () => {
+    if (!scenes.length) return;
+    setVoicesPreparing(true);
+    setVoiceOverallError("");
+    const initial = scenes.map(() => ({ status: "loading", url: null, mode: null }));
+    setVoices(initial);
+    const results = new Array(scenes.length);
+    const concurrency = 3;
+    let cursor = 0;
+    let anyAudioFailed = false;
+    async function worker() {
+      while (cursor < scenes.length) {
+        const i = cursor++;
+        const r = await generateVoiceForIndex(i, scenes[i].text);
+        if (r.mode === "browser") anyAudioFailed = true;
+        results[i] = r;
+        setVoices((prev) => { const n = [...prev]; n[i] = r; return n; });
+      }
+    }
+    await Promise.all(Array.from({ length: concurrency }, worker));
+    if (anyAudioFailed) {
+      setVoiceOverallError("Nogle scener kunne ikke få en AI-stemme (ElevenLabs) og bruger i stedet browserens indbyggede tale som reserve.");
+    }
+    setVoicesPreparing(false);
+  }, [scenes]);
+
+  useEffect(() => {
+    if (step === 4 && scenes.length > 0 && voices.length === 0) {
+      prepareVoices();
+    }
+  }, [step, scenes, voices.length, prepareVoices]);
+
+  // ---- Ambient background music (Web Audio, no external file needed) ----
+  const ensureAudioCtx = () => {
+    if (!audioCtxRef.current) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (Ctx) audioCtxRef.current = new Ctx();
+    }
+    return audioCtxRef.current;
+  };
+  const startMusic = () => {
+    const ctx = ensureAudioCtx();
+    if (!ctx || musicNodesRef.current) return;
+    const master = ctx.createGain();
+    master.gain.value = 0.0;
+    master.gain.linearRampToValueAtTime(0.045, ctx.currentTime + 1.5);
+    master.connect(ctx.destination);
+    const freqs = [130.81, 164.81, 196.0]; // soft C major-ish pad
+    const oscs = freqs.map((f, i) => {
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = f;
+      const g = ctx.createGain();
+      g.gain.value = 0.5;
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 0.05 + i * 0.02;
+      const lfoGain = ctx.createGain();
+      lfoGain.gain.value = 0.15;
+      lfo.connect(lfoGain); lfoGain.connect(g.gain);
+      osc.connect(g); g.connect(master);
+      osc.start(); lfo.start();
+      return { osc, lfo };
+    });
+    musicNodesRef.current = { master, oscs };
+  };
+  const stopMusic = () => {
+    const nodes = musicNodesRef.current;
+    const ctx = audioCtxRef.current;
+    if (!nodes || !ctx) return;
+    nodes.master.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.6);
+    setTimeout(() => {
+      nodes.oscs.forEach(({ osc, lfo }) => { try { osc.stop(); lfo.stop(); } catch (e) {} });
+    }, 700);
+    musicNodesRef.current = null;
+  };
+  useEffect(() => {
+    if (isPlaying && musicOn) startMusic();
+    if ((!isPlaying || !musicOn)) stopMusic();
+    // eslint-disable-next-line
+  }, [isPlaying, musicOn]);
+  useEffect(() => () => { stopMusic(); if (audioCtxRef.current) audioCtxRef.current.close(); }, []);
+
+  // ---- Playback engine ----
+  const advanceScene = useCallback(() => {
+    setCurrentIndex((i) => {
+      if (i + 1 >= scenes.length) { setIsPlaying(false); return 0; }
+      setPrevIndex(i);
+      return i + 1;
+    });
+  }, [scenes.length]);
 
   useEffect(() => {
     if (!isPlaying) return;
-    const scene = scenes[currentIndex];
-    if (!scene) { setIsPlaying(false); return; }
-    const cleanup = speak(scene.text, () => {
-      setCurrentIndex((i) => { if (i + 1 >= scenes.length) { setIsPlaying(false); return 0; } return i + 1; });
-    });
-    return cleanup;
+    const voice = voices[currentIndex];
+    if (!voice || voice.status !== "ready") return;
+    sceneStartRef.current = performance.now();
+    if (voice.mode === "audio" && voice.url) {
+      const audio = audioRef.current;
+      audio.src = voice.url;
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+      const onEnded = () => advanceScene();
+      audio.addEventListener("ended", onEnded);
+      return () => audio.removeEventListener("ended", onEnded);
+    } else {
+      const text = scenes[currentIndex]?.text || "";
+      if (text && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(text);
+        const daVoice = window.speechSynthesis.getVoices().find((v) => v.lang && v.lang.toLowerCase().startsWith("da"));
+        if (daVoice) utter.voice = daVoice;
+        utter.lang = "da-DK"; utter.rate = 0.96;
+        utter.onend = () => advanceScene();
+        utter.onerror = () => advanceScene();
+        window.speechSynthesis.speak(utter);
+        return () => window.speechSynthesis.cancel();
+      } else {
+        const t = setTimeout(advanceScene, FALLBACK_SCENE_MS);
+        return () => clearTimeout(t);
+      }
+    }
     // eslint-disable-next-line
-  }, [isPlaying, currentIndex]);
+  }, [isPlaying, currentIndex, voices]);
+
+  useEffect(() => {
+    if (prevIndex === null) return;
+    const t = setTimeout(() => setPrevIndex(null), 600);
+    return () => clearTimeout(t);
+  }, [prevIndex]);
+
+  const getProgress = useCallback(() => {
+    const voice = voices[currentIndex];
+    if (voice && voice.mode === "audio" && audioRef.current && audioRef.current.duration) {
+      return audioRef.current.currentTime / audioRef.current.duration;
+    }
+    const elapsed = performance.now() - sceneStartRef.current;
+    return elapsed / FALLBACK_SCENE_MS;
+  }, [voices, currentIndex]);
+
+  const allVoicesReady = voices.length === scenes.length && voices.every((v) => v && v.status === "ready");
 
   const togglePlay = () => {
-    if (isPlaying) { window.speechSynthesis && window.speechSynthesis.cancel(); setIsPlaying(false); }
-    else { if (currentIndex >= scenes.length) setCurrentIndex(0); setIsPlaying(true); }
+    if (isPlaying) {
+      audioRef.current && audioRef.current.pause();
+      window.speechSynthesis && window.speechSynthesis.cancel();
+      setIsPlaying(false);
+    } else {
+      if (!allVoicesReady) return;
+      if (currentIndex >= scenes.length) setCurrentIndex(0);
+      setIsPlaying(true);
+    }
   };
-  const restart = () => { window.speechSynthesis && window.speechSynthesis.cancel(); setCurrentIndex(0); setIsPlaying(true); };
+  const restart = () => {
+    audioRef.current && audioRef.current.pause();
+    window.speechSynthesis && window.speechSynthesis.cancel();
+    setPrevIndex(null);
+    setCurrentIndex(0);
+    setIsPlaying(true);
+  };
 
   const canGoStep = (n) => {
     if (n === 1) return true;
@@ -200,6 +413,7 @@ function Rundvis() {
 
   return (
     <div className="min-h-screen w-full" style={{ backgroundColor: INK, color: TEXT, fontFamily: "'IBM Plex Sans', sans-serif" }}>
+      <audio ref={audioRef} className="hidden" />
       <header className="border-b px-5 py-4" style={{ borderColor: LINE }}>
         <div className="max-w-3xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -322,7 +536,7 @@ function Rundvis() {
                     </div>
                   ))}
                 </div>
-                <button onClick={() => { setScenes([]); setGenError(""); }} className="flex items-center gap-1.5 text-xs mb-6" style={{ color: MUTED }}>
+                <button onClick={() => { setScenes([]); setGenError(""); setVoices([]); }} className="flex items-center gap-1.5 text-xs mb-6" style={{ color: MUTED }}>
                   <Icon name="rotate" size={12} /> Start manuskript forfra
                 </button>
               </>
@@ -342,10 +556,31 @@ function Rundvis() {
         {step === 4 && scenes.length > 0 && (
           <section>
             <h1 className="font-display text-2xl mb-1">Afspil</h1>
-            <p className="text-sm mb-5" style={{ color: MUTED }}>Simuleret kamerabevægelse i browseren, med talt voiceover. {!voiceReady && "(stemme indlæses…)"}</p>
+            <p className="text-sm mb-5" style={{ color: MUTED }}>
+              {voicesPreparing ? "Genererer AI-stemme for hver scene…" : "Filmisk kamerabevægelse, med rigtig AI-stemme."}
+            </p>
+            {voiceOverallError && <p className="text-xs mb-4" style={{ color: AMBER }}>{voiceOverallError}</p>}
+
             <div className="relative rounded-lg overflow-hidden mb-4" style={{ backgroundColor: "#000", aspectRatio: "16/9" }}>
-              <img key={currentIndex} src={images[currentIndex]?.src} alt="" className={`w-full h-full object-cover ${KEN_BURNS[currentIndex % KEN_BURNS.length]}`} />
-              <div className="absolute inset-x-0 bottom-0 p-4" style={{ background: "linear-gradient(to top, rgba(0,0,0,0.75), transparent)" }}>
+              {prevIndex !== null && (
+                <SceneLayer
+                  src={images[prevIndex]?.src}
+                  active={false}
+                  isPlaying={isPlaying}
+                  getProgress={() => 1}
+                  kbParams={kbParamsList[prevIndex] || { scaleFrom: 1, scaleTo: 1, panX: 0, panY: 0 }}
+                />
+              )}
+              <SceneLayer
+                key={currentIndex}
+                src={images[currentIndex]?.src}
+                active={true}
+                isPlaying={isPlaying}
+                getProgress={getProgress}
+                kbParams={kbParamsList[currentIndex] || { scaleFrom: 1, scaleTo: 1, panX: 0, panY: 0 }}
+              />
+              <div className="absolute inset-0 vignette pointer-events-none" style={{ zIndex: 3 }} />
+              <div className="absolute inset-x-0 bottom-0 p-4" style={{ background: "linear-gradient(to top, rgba(0,0,0,0.8), transparent)", zIndex: 4 }}>
                 {(agentName || address) && (
                   <div className="flex items-center justify-between mb-2 text-[10px]" style={{ color: "rgba(255,255,255,0.7)" }}>
                     <span>{agentName}</span><span>{address}</span>
@@ -353,21 +588,44 @@ function Rundvis() {
                 )}
                 <p className="text-white text-sm sm:text-base font-medium leading-snug">{scenes[currentIndex]?.text}</p>
               </div>
-              <div className="absolute top-3 right-3 px-2 py-1 rounded text-[10px] font-medium flex items-center gap-1" style={{ backgroundColor: "rgba(0,0,0,0.55)", color: "#fff" }}>
+              <div className="absolute top-3 right-3 px-2 py-1 rounded text-[10px] font-medium flex items-center gap-1" style={{ backgroundColor: "rgba(0,0,0,0.55)", color: "#fff", zIndex: 4 }}>
                 <Icon name="volume" size={11} /> {typeLabel}
               </div>
+              {voicesPreparing && (
+                <div className="absolute inset-0 flex items-center justify-center" style={{ backgroundColor: "rgba(0,0,0,0.45)", zIndex: 5 }}>
+                  <div className="flex items-center gap-2 px-4 py-2 rounded-full text-xs" style={{ backgroundColor: "rgba(0,0,0,0.6)", color: "#fff" }}>
+                    <Icon name="loader" size={14} /> Genererer stemmer ({voices.filter((v) => v && v.status === "ready").length}/{scenes.length})
+                  </div>
+                </div>
+              )}
             </div>
+
             <div className="flex items-center justify-center gap-2 mb-5">
               {scenes.map((_, i) => (
-                <button key={i} onClick={() => { window.speechSynthesis && window.speechSynthesis.cancel(); setCurrentIndex(i); setIsPlaying(true); }}
+                <button key={i} onClick={() => {
+                    audioRef.current && audioRef.current.pause();
+                    window.speechSynthesis && window.speechSynthesis.cancel();
+                    setPrevIndex(currentIndex);
+                    setCurrentIndex(i);
+                    if (allVoicesReady) setIsPlaying(true);
+                  }}
                   className="rounded-full transition-all" style={{ width: i === currentIndex ? 20 : 6, height: 6, backgroundColor: i === currentIndex ? ACCENT : LINE }} />
               ))}
             </div>
-            <div className="flex items-center justify-center gap-3 mb-8">
-              <button onClick={restart} className="p-3 rounded-full" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="rotate" size={16} /></button>
-              <button onClick={togglePlay} className="p-4 rounded-full" style={{ backgroundColor: ACCENT, color: "#fff" }}><Icon name={isPlaying ? "pause" : "play"} size={20} /></button>
+
+            <div className="flex items-center justify-center gap-3 mb-4">
+              <button onClick={restart} disabled={!allVoicesReady} className="p-3 rounded-full" style={{ border: `1px solid ${LINE}`, color: MUTED, opacity: allVoicesReady ? 1 : 0.5 }}><Icon name="rotate" size={16} /></button>
+              <button onClick={togglePlay} disabled={!allVoicesReady} className="p-4 rounded-full" style={{ backgroundColor: ACCENT, color: "#fff", opacity: allVoicesReady ? 1 : 0.5 }}>
+                {voicesPreparing ? <Icon name="loader" size={20} /> : <Icon name={isPlaying ? "pause" : "play"} size={20} />}
+              </button>
               <button title="Kræver tilkobling af en AI-videomodel i produktionsversionen" className="px-4 py-3 rounded-full text-xs" style={{ border: `1px solid ${LINE}`, color: MUTED, cursor: "default" }}>Eksportér (kommer snart)</button>
             </div>
+
+            <label className="flex items-center justify-center gap-2 text-xs mb-8 cursor-pointer" style={{ color: MUTED }}>
+              <input type="checkbox" checked={musicOn} onChange={(e) => setMusicOn(e.target.checked)} />
+              <Icon name="music" size={13} /> Blød baggrundsmusik
+            </label>
+
             <button onClick={() => setStep(3)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> Ret manuskript</button>
           </section>
         )}
