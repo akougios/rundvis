@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Rundvis — AI boligvideo prototype</title>
+<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+  :root { box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+  html, body, #root { height: 100%; }
+  body { margin: 0; background: #15191C; font-family: 'IBM Plex Sans', sans-serif; }
+  .font-display { font-family: 'Fraunces', serif; }
+  ::-webkit-scrollbar { height: 6px; width: 6px; }
+  ::-webkit-scrollbar-thumb { background: #2C3237; border-radius: 3px; }
+  @keyframes kbIn { from { transform: scale(1); } to { transform: scale(1.14); } }
+  @keyframes kbOut { from { transform: scale(1.14); } to { transform: scale(1); } }
+  @keyframes kbPanL { from { transform: scale(1.12) translateX(2.5%); } to { transform: scale(1.12) translateX(-2.5%); } }
+  @keyframes kbPanR { from { transform: scale(1.12) translateX(-2.5%); } to { transform: scale(1.12) translateX(2.5%); } }
+  .kb-in { animation: kbIn 7s ease-in-out forwards; }
+  .kb-out { animation: kbOut 7s ease-in-out forwards; }
+  .kb-pan-l { animation: kbPanL 7s ease-in-out forwards; }
+  .kb-pan-r { animation: kbPanR 7s ease-in-out forwards; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { animation: spin 1s linear infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    .kb-in, .kb-out, .kb-pan-l, .kb-pan-r, .spin { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useRef, useEffect, useCallback } = React;
+
+const INK = "#15191C", SURFACE = "#1D2226", SURFACE_2 = "#242A2E", TEXT = "#F2EFE7",
+  MUTED = "#98A0A6", ACCENT = "#3860E8", ACCENT_SOFT = "#293B72", AMBER = "#E3A33D", LINE = "#2C3237";
+
+const PROPERTY_TYPES = [
+  { id: "villa", label: "Villa", hint: "Roligt tempo, fokus på rum og lys" },
+  { id: "sommerhus", label: "Sommerhus", hint: "Udeliv, terrasse, udsigt" },
+  { id: "liebhaver", label: "Liebhaverbolig", hint: "Langsomt, cinematisk, detaljer" },
+  { id: "nyhed", label: "Nyhed på markedet", hint: "Energisk tempo, skaber interesse" },
+  { id: "prisnedsaettelse", label: "Prisnedsættelse", hint: "Tydeligt fokus på ny pris" },
+  { id: "aabenthus", label: "Åbent hus", hint: "Dato og tidspunkt fremhævet" },
+];
+const KEN_BURNS = ["kb-in", "kb-out", "kb-pan-l", "kb-pan-r"];
+const STEPS = [{ id: 1, label: "Boligtype" }, { id: 2, label: "Billeder" }, { id: 3, label: "Manuskript" }, { id: 4, label: "Afspil" }];
+
+function Icon({ name, size = 16, className = "", style = {} }) {
+  const p = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
+    strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", className, style };
+  switch (name) {
+    case "upload": return <svg {...p}><path d="M12 3v12" /><path d="m7 8 5-5 5 5" /><path d="M5 21h14" /></svg>;
+    case "play": return <svg {...p} fill="currentColor"><polygon points="6 3 20 12 6 21 6 3" /></svg>;
+    case "pause": return <svg {...p} fill="currentColor"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>;
+    case "chevronLeft": return <svg {...p}><polyline points="15 18 9 12 15 6" /></svg>;
+    case "chevronRight": return <svg {...p}><polyline points="9 18 15 12 9 6" /></svg>;
+    case "sparkles": return <svg {...p} fill="currentColor" stroke="none"><path d="M12 2l1.8 5.4L19 9l-5.2 1.6L12 16l-1.8-5.4L5 9l5.2-1.6z" /></svg>;
+    case "x": return <svg {...p}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>;
+    case "arrowUp": return <svg {...p}><line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" /></svg>;
+    case "arrowDown": return <svg {...p}><line x1="12" y1="5" x2="12" y2="19" /><polyline points="19 12 12 19 5 12" /></svg>;
+    case "check": return <svg {...p}><polyline points="20 6 9 17 4 12" /></svg>;
+    case "rotate": return <svg {...p}><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>;
+    case "loader": return <svg {...p} className={"spin " + className}><circle cx="12" cy="12" r="9" strokeDasharray="40 20" /></svg>;
+    case "film": return <svg {...p}><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="7" y1="3" x2="7" y2="21" /><line x1="17" y1="3" x2="17" y2="21" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="3" y1="15" x2="21" y2="15" /></svg>;
+    case "volume": return <svg {...p}><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M18.5 5.5a9 9 0 0 1 0 13" /></svg>;
+    default: return null;
+  }
+}
+
+function StepPill({ step, active, done, onClick, disabled }) {
+  return (
+    <button onClick={onClick} disabled={disabled}
+      className="flex items-center gap-2 px-3 py-2 rounded-full text-sm whitespace-nowrap transition-colors shrink-0"
+      style={{ backgroundColor: active ? ACCENT : done ? SURFACE_2 : "transparent", color: active ? "#fff" : done ? TEXT : MUTED,
+        border: `1px solid ${active ? ACCENT : LINE}`, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1 }}>
+      <span className="flex items-center justify-center rounded-full text-xs font-medium" style={{ width: 18, height: 18,
+        backgroundColor: done && !active ? ACCENT : "transparent", border: active || (done && !active) ? "none" : `1px solid ${MUTED}`,
+        color: active ? "#fff" : done ? "#fff" : MUTED }}>
+        {done && !active ? <Icon name="check" size={11} /> : step}
+      </span>
+      {STEPS[step - 1].label}
+    </button>
+  );
+}
+
+function Rundvis() {
+  const [step, setStep] = useState(1);
+  const [propertyType, setPropertyType] = useState(null);
+  const [images, setImages] = useState([]);
+  const [address, setAddress] = useState("");
+  const [agentName, setAgentName] = useState("");
+  const [notes, setNotes] = useState("");
+  const [scenes, setScenes] = useState([]);
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState("");
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [voiceReady, setVoiceReady] = useState(false);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) return;
+    const load = () => setVoiceReady(true);
+    load();
+    window.speechSynthesis.onvoiceschanged = load;
+    return () => { window.speechSynthesis.onvoiceschanged = null; };
+  }, []);
+  useEffect(() => () => { if ("speechSynthesis" in window) window.speechSynthesis.cancel(); }, []);
+
+  const handleFiles = (fileList) => {
+    const files = Array.from(fileList).slice(0, 20 - images.length);
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (e) => setImages((prev) => [...prev, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, src: e.target.result }]);
+      reader.readAsDataURL(file);
+    });
+  };
+  const removeImage = (id) => setImages((prev) => prev.filter((i) => i.id !== id));
+  const moveImage = (idx, dir) => {
+    setImages((prev) => {
+      const next = [...prev]; const target = idx + dir;
+      if (target < 0 || target >= next.length) return prev;
+      [next[idx], next[target]] = [next[target], next[idx]];
+      return next;
+    });
+  };
+
+  const generateScript = async () => {
+    setGenerating(true); setGenError("");
+    try {
+      const typeLabel = PROPERTY_TYPES.find((t) => t.id === propertyType)?.label || "bolig";
+      const response = await fetch("/api/generate-script", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          propertyTypeLabel: typeLabel,
+          address,
+          agentName,
+          notes,
+          sceneCount: images.length,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Ukendt fejl fra serveren.");
+      const lines = data.lines || [];
+      setScenes(images.map((img, i) => ({ imageId: img.id, text: lines[i] || "" })));
+      setStep(3);
+    } catch (err) {
+      setGenError(`Kunne ikke generere manuskript: ${err.message}. Prøv igen, eller skriv scenerne manuelt herunder.`);
+      if (scenes.length === 0) setScenes(images.map((img) => ({ imageId: img.id, text: "" })));
+    } finally { setGenerating(false); }
+  };
+
+  const updateScene = (idx, text) => setScenes((prev) => { const n = [...prev]; n[idx] = { ...n[idx], text }; return n; });
+
+  const speak = useCallback((text, onEnd) => {
+    if (!text || !("speechSynthesis" in window)) { const t = setTimeout(onEnd, 1800); return () => clearTimeout(t); }
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    const voices = window.speechSynthesis.getVoices();
+    const daVoice = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith("da"));
+    if (daVoice) utter.voice = daVoice;
+    utter.lang = "da-DK"; utter.rate = 0.96;
+    utter.onend = onEnd; utter.onerror = onEnd;
+    window.speechSynthesis.speak(utter);
+    return () => window.speechSynthesis.cancel();
+  }, []);
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    const scene = scenes[currentIndex];
+    if (!scene) { setIsPlaying(false); return; }
+    const cleanup = speak(scene.text, () => {
+      setCurrentIndex((i) => { if (i + 1 >= scenes.length) { setIsPlaying(false); return 0; } return i + 1; });
+    });
+    return cleanup;
+    // eslint-disable-next-line
+  }, [isPlaying, currentIndex]);
+
+  const togglePlay = () => {
+    if (isPlaying) { window.speechSynthesis && window.speechSynthesis.cancel(); setIsPlaying(false); }
+    else { if (currentIndex >= scenes.length) setCurrentIndex(0); setIsPlaying(true); }
+  };
+  const restart = () => { window.speechSynthesis && window.speechSynthesis.cancel(); setCurrentIndex(0); setIsPlaying(true); };
+
+  const canGoStep = (n) => {
+    if (n === 1) return true;
+    if (n === 2) return !!propertyType;
+    if (n === 3) return !!propertyType && images.length >= 3;
+    if (n === 4) return scenes.length > 0 && scenes.every((s) => s.text);
+    return false;
+  };
+  const typeLabel = PROPERTY_TYPES.find((t) => t.id === propertyType)?.label;
+
+  return (
+    <div className="min-h-screen w-full" style={{ backgroundColor: INK, color: TEXT, fontFamily: "'IBM Plex Sans', sans-serif" }}>
+      <header className="border-b px-5 py-4" style={{ borderColor: LINE }}>
+        <div className="max-w-3xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center justify-center rounded" style={{ width: 28, height: 28, backgroundColor: ACCENT }}>
+              <Icon name="film" size={15} style={{ color: "#fff" }} />
+            </div>
+            <span className="font-display text-lg">Rundvis</span>
+          </div>
+          <span className="text-xs hidden sm:block" style={{ color: MUTED }}>Prototype til intern test</span>
+        </div>
+      </header>
+
+      <div className="max-w-3xl mx-auto px-5 pt-5">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {STEPS.map((s) => <StepPill key={s.id} step={s.id} active={step === s.id} done={step > s.id} disabled={!canGoStep(s.id)} onClick={() => setStep(s.id)} />)}
+        </div>
+      </div>
+
+      <main className="max-w-3xl mx-auto px-5 py-8">
+        {step === 1 && (
+          <section>
+            <h1 className="font-display text-2xl mb-1">Hvilken slags video?</h1>
+            <p className="text-sm mb-6" style={{ color: MUTED }}>Vælger tone og tempo for manuskript og fremvisning.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {PROPERTY_TYPES.map((t) => (
+                <button key={t.id} onClick={() => setPropertyType(t.id)} className="text-left rounded-lg p-4 transition-colors"
+                  style={{ backgroundColor: propertyType === t.id ? ACCENT_SOFT : SURFACE, border: `1px solid ${propertyType === t.id ? ACCENT : LINE}` }}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-medium text-sm">{t.label}</span>
+                    {propertyType === t.id && <Icon name="check" size={15} style={{ color: ACCENT }} />}
+                  </div>
+                  <span className="text-xs" style={{ color: MUTED }}>{t.hint}</span>
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setStep(2)} disabled={!propertyType} className="mt-7 flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium"
+              style={{ backgroundColor: propertyType ? ACCENT : SURFACE_2, color: propertyType ? "#fff" : MUTED, cursor: propertyType ? "pointer" : "not-allowed" }}>
+              Fortsæt <Icon name="chevronRight" size={15} />
+            </button>
+          </section>
+        )}
+
+        {step === 2 && (
+          <section>
+            <h1 className="font-display text-2xl mb-1">Upload boligbilleder</h1>
+            <p className="text-sm mb-6" style={{ color: MUTED }}>10–20 billeder giver det bedste resultat. Rækkefølgen bliver scenerækkefølgen.</p>
+            <div onClick={() => fileInputRef.current?.click()} onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); }}
+              className="rounded-lg p-8 text-center cursor-pointer mb-5" style={{ border: `1.5px dashed ${LINE}`, backgroundColor: SURFACE }}>
+              <Icon name="upload" size={22} style={{ color: MUTED, margin: "0 auto 10px" }} />
+              <p className="text-sm">Træk billeder herind, eller <span style={{ color: ACCENT }}>vælg filer</span></p>
+              <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => handleFiles(e.target.files)} />
+            </div>
+            {images.length > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-7">
+                {images.map((img, idx) => (
+                  <div key={img.id} className="relative rounded-md overflow-hidden" style={{ backgroundColor: SURFACE, aspectRatio: "4/3" }}>
+                    <img src={img.src} alt="" className="w-full h-full object-cover" />
+                    <div className="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ backgroundColor: "rgba(0,0,0,0.6)", color: "#fff" }}>{idx + 1}</div>
+                    <div className="absolute top-1 right-1 flex gap-1">
+                      <button onClick={() => removeImage(img.id)} className="p-1 rounded" style={{ backgroundColor: "rgba(0,0,0,0.6)" }}><Icon name="x" size={12} style={{ color: "#fff" }} /></button>
+                    </div>
+                    <div className="absolute bottom-1 right-1 flex gap-1">
+                      <button onClick={() => moveImage(idx, -1)} disabled={idx === 0} className="p-1 rounded" style={{ backgroundColor: "rgba(0,0,0,0.6)", opacity: idx === 0 ? 0.4 : 1 }}><Icon name="arrowUp" size={12} style={{ color: "#fff" }} /></button>
+                      <button onClick={() => moveImage(idx, 1)} disabled={idx === images.length - 1} className="p-1 rounded" style={{ backgroundColor: "rgba(0,0,0,0.6)", opacity: idx === images.length - 1 ? 0.4 : 1 }}><Icon name="arrowDown" size={12} style={{ color: "#fff" }} /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-3 flex-wrap">
+              <button onClick={() => setStep(1)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> Tilbage</button>
+              <button onClick={() => setStep(3)} disabled={images.length < 3} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium"
+                style={{ backgroundColor: images.length >= 3 ? ACCENT : SURFACE_2, color: images.length >= 3 ? "#fff" : MUTED, cursor: images.length >= 3 ? "pointer" : "not-allowed" }}>
+                Fortsæt <Icon name="chevronRight" size={15} />
+              </button>
+              {images.length > 0 && images.length < 3 && <span className="text-xs" style={{ color: MUTED }}>Mindst 3 billeder</span>}
+            </div>
+          </section>
+        )}
+
+        {step === 3 && (
+          <section>
+            <h1 className="font-display text-2xl mb-1">Manuskript</h1>
+            <p className="text-sm mb-6" style={{ color: MUTED }}>Udfyld detaljer og generér forslag til voiceover — ret linjerne til bagefter.</p>
+            {scenes.length === 0 && (
+              <div className="space-y-3 mb-6">
+                <div>
+                  <label className="text-xs block mb-1" style={{ color: MUTED }}>Adresse</label>
+                  <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Fx Strandvejen 12, 2900 Hellerup"
+                    className="w-full rounded-md px-3 py-2 text-sm outline-none" style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}`, color: TEXT }} />
+                </div>
+                <div>
+                  <label className="text-xs block mb-1" style={{ color: MUTED }}>Mæglernavn</label>
+                  <input value={agentName} onChange={(e) => setAgentName(e.target.value)} placeholder="Fx Mette Holm, Home Hellerup"
+                    className="w-full rounded-md px-3 py-2 text-sm outline-none" style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}`, color: TEXT }} />
+                </div>
+                <div>
+                  <label className="text-xs block mb-1" style={{ color: MUTED }}>Nøgledetaljer fra salgsopstilling (valgfrit)</label>
+                  <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Fx 4 værelser, sydvendt terrasse, nyt køkken 2023, gåafstand til station" rows={3}
+                    className="w-full rounded-md px-3 py-2 text-sm outline-none resize-none" style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}`, color: TEXT }} />
+                </div>
+                {genError && <p className="text-xs" style={{ color: AMBER }}>{genError}</p>}
+                <button onClick={generateScript} disabled={generating} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium" style={{ backgroundColor: ACCENT, color: "#fff" }}>
+                  {generating ? <><Icon name="loader" size={15} /> Genererer…</> : <><Icon name="sparkles" size={15} /> Generér manuskript</>}
+                </button>
+              </div>
+            )}
+            {scenes.length > 0 && (
+              <>
+                <div className="space-y-3 mb-6">
+                  {scenes.map((scene, idx) => (
+                    <div key={scene.imageId} className="flex gap-3 rounded-md p-2" style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}` }}>
+                      <img src={images.find((i) => i.id === scene.imageId)?.src} alt="" className="rounded object-cover shrink-0" style={{ width: 64, height: 64 }} />
+                      <div className="flex-1">
+                        <span className="text-[10px]" style={{ color: MUTED }}>Scene {idx + 1}</span>
+                        <textarea value={scene.text} onChange={(e) => updateScene(idx, e.target.value)} rows={2}
+                          className="w-full bg-transparent text-sm outline-none resize-none mt-0.5" style={{ color: TEXT }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => { setScenes([]); setGenError(""); }} className="flex items-center gap-1.5 text-xs mb-6" style={{ color: MUTED }}>
+                  <Icon name="rotate" size={12} /> Start manuskript forfra
+                </button>
+              </>
+            )}
+            <div className="flex items-center gap-3 flex-wrap">
+              <button onClick={() => setStep(2)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> Tilbage</button>
+              {scenes.length > 0 && (
+                <button onClick={() => setStep(4)} disabled={!scenes.every((s) => s.text)} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium"
+                  style={{ backgroundColor: scenes.every((s) => s.text) ? ACCENT : SURFACE_2, color: scenes.every((s) => s.text) ? "#fff" : MUTED }}>
+                  Gå til afspilning <Icon name="chevronRight" size={15} />
+                </button>
+              )}
+            </div>
+          </section>
+        )}
+
+        {step === 4 && scenes.length > 0 && (
+          <section>
+            <h1 className="font-display text-2xl mb-1">Afspil</h1>
+            <p className="text-sm mb-5" style={{ color: MUTED }}>Simuleret kamerabevægelse i browseren, med talt voiceover. {!voiceReady && "(stemme indlæses…)"}</p>
+            <div className="relative rounded-lg overflow-hidden mb-4" style={{ backgroundColor: "#000", aspectRatio: "16/9" }}>
+              <img key={currentIndex} src={images[currentIndex]?.src} alt="" className={`w-full h-full object-cover ${KEN_BURNS[currentIndex % KEN_BURNS.length]}`} />
+              <div className="absolute inset-x-0 bottom-0 p-4" style={{ background: "linear-gradient(to top, rgba(0,0,0,0.75), transparent)" }}>
+                {(agentName || address) && (
+                  <div className="flex items-center justify-between mb-2 text-[10px]" style={{ color: "rgba(255,255,255,0.7)" }}>
+                    <span>{agentName}</span><span>{address}</span>
+                  </div>
+                )}
+                <p className="text-white text-sm sm:text-base font-medium leading-snug">{scenes[currentIndex]?.text}</p>
+              </div>
+              <div className="absolute top-3 right-3 px-2 py-1 rounded text-[10px] font-medium flex items-center gap-1" style={{ backgroundColor: "rgba(0,0,0,0.55)", color: "#fff" }}>
+                <Icon name="volume" size={11} /> {typeLabel}
+              </div>
+            </div>
+            <div className="flex items-center justify-center gap-2 mb-5">
+              {scenes.map((_, i) => (
+                <button key={i} onClick={() => { window.speechSynthesis && window.speechSynthesis.cancel(); setCurrentIndex(i); setIsPlaying(true); }}
+                  className="rounded-full transition-all" style={{ width: i === currentIndex ? 20 : 6, height: 6, backgroundColor: i === currentIndex ? ACCENT : LINE }} />
+              ))}
+            </div>
+            <div className="flex items-center justify-center gap-3 mb-8">
+              <button onClick={restart} className="p-3 rounded-full" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="rotate" size={16} /></button>
+              <button onClick={togglePlay} className="p-4 rounded-full" style={{ backgroundColor: ACCENT, color: "#fff" }}><Icon name={isPlaying ? "pause" : "play"} size={20} /></button>
+              <button title="Kræver tilkobling af en AI-videomodel i produktionsversionen" className="px-4 py-3 rounded-full text-xs" style={{ border: `1px solid ${LINE}`, color: MUTED, cursor: "default" }}>Eksportér (kommer snart)</button>
+            </div>
+            <button onClick={() => setStep(3)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> Ret manuskript</button>
+          </section>
+        )}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<Rundvis />);
+</script>
+</body>
+</html>
