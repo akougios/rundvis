@@ -56,6 +56,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: "ray-3.2",
         type: "video",
+        prompt: "Smooth, slow cinematic camera glide through a real estate interior, professional real-estate walkthrough style, stable and steady motion, no jump cuts.",
         aspect_ratio: aspectRatio || "9:16",
         video: {
           resolution: "720p",
