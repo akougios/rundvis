@@ -1,15 +1,21 @@
-// Serverless function (Vercel) — starts ONE Luma Ray-2 generation segment.
+// Serverless function (Vercel) — starts ONE Luma Ray video generation segment.
 // Called repeatedly by the browser to build a chained "flythrough": each
 // new segment continues the camera motion from the end of the previous
-// generation (frame0 = {type:"generation", id: prevId}) toward the next
-// still image (frame1 = {type:"image", url: endImageUrl}). The very first
+// generation (video.start_frame = {generation_id: prevId}) toward the next
+// still image (video.end_frame = {url: endImageUrl}). The very first
 // segment in a chain has no previous generation, so it starts from a
-// static image instead (frame0 = {type:"image", url: startImageUrl}).
+// static image instead (video.start_frame = {url: startImageUrl}).
 //
 // Luma generations are asynchronous — this returns immediately with an id
-// and a "queued"/"dreaming" state. The browser polls /status for completion.
+// and a "queued"/"processing" state. The browser polls /status for completion.
+//
+// NOTE: Luma retired the legacy api.lumalabs.ai/dream-machine/v1 API in
+// favor of the new Agents API (agents.lumalabs.ai/v1). New API keys
+// (the "luma-api-..." keys issued from platform.lumalabs.ai) only work
+// against the new API — that's what caused the "Not authenticated" errors
+// when this was still pointed at the old endpoint.
 
-const LUMA_BASE = "https://api.lumalabs.ai/dream-machine/v1/generations";
+const LUMA_BASE = "https://agents.lumalabs.ai/v1/generations";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -36,12 +42,9 @@ export default async function handler(req, res) {
     return;
   }
 
-  const keyframes = {
-    frame0: prevGenerationId
-      ? { type: "generation", id: prevGenerationId }
-      : { type: "image", url: startImageUrl },
-    frame1: { type: "image", url: endImageUrl },
-  };
+  const startFrame = prevGenerationId
+    ? { generation_id: prevGenerationId }
+    : { url: startImageUrl };
 
   try {
     const lumaRes = await fetch(LUMA_BASE, {
@@ -51,11 +54,15 @@ export default async function handler(req, res) {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "ray-2",
-        resolution: "720p",
-        duration: "5s",
+        model: "ray-3.2",
+        type: "video",
         aspect_ratio: aspectRatio || "9:16",
-        keyframes,
+        video: {
+          resolution: "720p",
+          duration: "5s",
+          start_frame: startFrame,
+          end_frame: { url: endImageUrl },
+        },
       }),
     });
 

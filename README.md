@@ -68,13 +68,19 @@ Sæt `ANTHROPIC_API_KEY` i en `.env` fil eller via `vercel env pull` først.
 ## AI-gennemgang (eksperimentel, `/api/generate-flythrough/*`)
 
 En separat, dyrere pipeline der genererer en ægte AI-video (ikke CSS-simuleret)
-ud fra op til 8 billeder, via Luma Ray-2. Da Luma's offentlige API kun
-understøtter 2 keyframes (start/slut) per kald — ikke reelt 16 keyframes i ét
-sammenhængende klip — er det bygget som en **kæde af klip**: hvert nyt klip
-fortsætter kamerabevægelsen fra slutningen af det forrige (`frame0: {type:
-"generation", id: <forrige klips id>}`) mod næste stillbillede (`frame1:
-{type: "image", url: ...}`). Browseren afspiller segmenterne i træk ved at
-skifte `<video>`-kildens `src` når hvert klip slutter.
+ud fra op til 8 billeder, via Luma Ray (model `ray-3.2`, Luma's nuværende
+Agents API på `agents.lumalabs.ai/v1`). Da Luma's API kun understøtter 2
+keyframes (start/slut) per kald — ikke ét sammenhængende klip med mange
+billeder — er det bygget som en **kæde af klip**: hvert nyt klip fortsætter
+kamerabevægelsen fra slutningen af det forrige (`video.start_frame:
+{generation_id: <forrige klips id>}`) mod næste stillbillede
+(`video.end_frame: {url: ...}`). Browseren afspiller segmenterne i træk ved
+at skifte `<video>`-kildens `src` når hvert klip slutter.
+
+**Vigtigt om Luma-nøgler:** Luma migrerede i 2026 til en ny API
+(`agents.lumalabs.ai`, nøgler i formatet `luma-api-...`). Den gamle
+`api.lumalabs.ai/dream-machine/v1`-integration accepterer ikke disse nye
+nøgler og fejler med "Not authenticated" — koden her bruger den nye API.
 
 Vigtigt: dette er ikke ét enkelt uafbrudt kamera-flow — det er en kæde af
 5-sekunders klip der hver fortsætter bevægelsen fra det forrige. Kvaliteten

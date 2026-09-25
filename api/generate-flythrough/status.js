@@ -1,8 +1,11 @@
 // Serverless function (Vercel) — polls the status of one Luma generation.
 // The browser calls this every few seconds until state is "completed"
 // (returns the finished clip's video URL) or "failed".
+//
+// Uses Luma's current Agents API (agents.lumalabs.ai/v1) — see the note in
+// create-segment.js about the migration from the old dream-machine/v1 API.
 
-const LUMA_BASE = "https://api.lumalabs.ai/dream-machine/v1/generations";
+const LUMA_BASE = "https://agents.lumalabs.ai/v1/generations";
 
 export default async function handler(req, res) {
   if (req.method !== "GET") {
@@ -34,10 +37,17 @@ export default async function handler(req, res) {
       return;
     }
 
+    // "processing" is the current in-flight state name (the old API used
+    // "dreaming"); the browser only checks for "completed" / "failed", so
+    // any other value just means "still working".
+    const videoOutput = Array.isArray(data.output)
+      ? data.output.find((o) => o.url) || data.output[0]
+      : null;
+
     res.status(200).json({
-      state: data.state, // "queued" | "dreaming" | "completed" | "failed"
-      videoUrl: data.assets?.video || null,
-      failureReason: data.failure_reason || null,
+      state: data.state,
+      videoUrl: videoOutput?.url || null,
+      failureReason: data.failure_reason || data.failure_code || null,
     });
   } catch (err) {
     res.status(500).json({ error: `Kunne ikke hente status: ${err.message}` });
