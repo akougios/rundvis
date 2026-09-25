@@ -44,6 +44,10 @@ Sæt `ANTHROPIC_API_KEY` i en `.env` fil eller via `vercel env pull` først.
 - `ANTHROPIC_API_KEY` — manuskript-generering (`/api/generate-script`)
 - `ELEVENLABS_API_KEY` — AI-stemme (`/api/generate-voice`)
 - `ELEVENLABS_VOICE_ID` (valgfri) — override standard-stemmen (default: "Sarah", `EXAVITQu4vr4xnSDxMaL`)
+- `LUMA_API_KEY` — AI-gennemgang / flythrough (`/api/generate-flythrough/*`)
+- `BLOB_READ_WRITE_TOKEN` — sættes automatisk når du opretter en Blob Store under
+  Vercel → Storage → Create Database → Blob, og forbinder den til projektet.
+  Kræves af `/api/upload-image` for at give Luma offentlige billed-URL'er.
 
 ## Vigtigt at vide om denne prototype
 
@@ -60,3 +64,21 @@ Sæt `ANTHROPIC_API_KEY` i en `.env` fil eller via `vercel env pull` først.
   ingen ekstern lydfil) — kan slås til/fra under afspilning.
 - **Der er ingen eksport til mp4/delbar fil** — kun live-afspilning i browseren.
 - Ingen database, ingen brugerlogin, ingen betaling — ren UX/flow-prototype.
+
+## AI-gennemgang (eksperimentel, `/api/generate-flythrough/*`)
+
+En separat, dyrere pipeline der genererer en ægte AI-video (ikke CSS-simuleret)
+ud fra op til 8 billeder, via Luma Ray-2. Da Luma's offentlige API kun
+understøtter 2 keyframes (start/slut) per kald — ikke reelt 16 keyframes i ét
+sammenhængende klip — er det bygget som en **kæde af klip**: hvert nyt klip
+fortsætter kamerabevægelsen fra slutningen af det forrige (`frame0: {type:
+"generation", id: <forrige klips id>}`) mod næste stillbillede (`frame1:
+{type: "image", url: ...}`). Browseren afspiller segmenterne i træk ved at
+skifte `<video>`-kildens `src` når hvert klip slutter.
+
+Vigtigt: dette er ikke ét enkelt uafbrudt kamera-flow — det er en kæde af
+5-sekunders klip der hver fortsætter bevægelsen fra det forrige. Kvaliteten
+af overgangene bør testes på rigtige boligbilleder før det bruges i praksis.
+Ingen voiceover i denne pipeline; kun det visuelle (+ evt. den eksisterende
+ambient baggrundsmusik, som endnu ikke er koblet på afspilleren for dette
+flow).

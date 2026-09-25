@@ -2,5 +2,8 @@
   "name": "rundvis",
   "version": "0.1.0",
   "private": true,
-  "description": "Rundvis — prototype: AI boligvideo-værktøj til ejendomsmæglere"
+  "description": "Rundvis — prototype: AI boligvideo-værktøj til ejendomsmæglere",
+  "dependencies": {
+    "@vercel/blob": "^0.27.1"
+  }
 }

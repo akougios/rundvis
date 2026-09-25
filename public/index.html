@@ -177,6 +177,13 @@ function Rundvis() {
   const [voiceOverallError, setVoiceOverallError] = useState("");
   const [musicOn, setMusicOn] = useState(false);
 
+  const [flythroughStatus, setFlythroughStatus] = useState("idle"); // idle|uploading|generating|ready|error
+  const [flythroughError, setFlythroughError] = useState("");
+  const [flythroughSegments, setFlythroughSegments] = useState([]); // [{id, videoUrl}]
+  const [flythroughProgress, setFlythroughProgress] = useState({ done: 0, total: 0 });
+  const [flythroughPlayIndex, setFlythroughPlayIndex] = useState(0);
+  const flythroughVideoRef = useRef(null);
+
   const fileInputRef = useRef(null);
   const audioRef = useRef(null);
   const sceneStartRef = useRef(0);
@@ -382,6 +389,85 @@ function Rundvis() {
   }, [voices, currentIndex]);
 
   const allVoicesReady = voices.length === scenes.length && voices.every((v) => v && v.status === "ready");
+
+  // ---- AI-gennemgang (experimental): chained Luma Ray-2 clips, no voiceover ----
+  const MAX_FLYTHROUGH_IMAGES = 8;
+
+  const uploadImageForFlythrough = async (src, index) => {
+    const res = await fetch("/api/upload-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataUrl: src, filename: `rundvis-${Date.now()}-${index}.jpg` }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Upload fejlede.");
+    return data.url;
+  };
+
+  const pollSegment = async (id) => {
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const res = await fetch(`/api/generate-flythrough/status?id=${encodeURIComponent(id)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Statusopslag fejlede.");
+      if (data.state === "completed") return data.videoUrl;
+      if (data.state === "failed") throw new Error(data.failureReason || "Klippet fejlede hos Luma.");
+    }
+  };
+
+  const runFlythrough = async () => {
+    setFlythroughStatus("uploading");
+    setFlythroughError("");
+    setFlythroughSegments([]);
+    setFlythroughPlayIndex(0);
+    try {
+      const used = images.slice(0, MAX_FLYTHROUGH_IMAGES);
+      const urls = [];
+      for (let i = 0; i < used.length; i++) {
+        urls.push(await uploadImageForFlythrough(used[i].src, i));
+      }
+      setFlythroughStatus("generating");
+      const totalSegments = urls.length - 1;
+      setFlythroughProgress({ done: 0, total: totalSegments });
+      let prevId = null;
+      const segments = [];
+      for (let i = 0; i < totalSegments; i++) {
+        const res = await fetch("/api/generate-flythrough/create-segment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            startImageUrl: prevId ? undefined : urls[i],
+            endImageUrl: urls[i + 1],
+            prevGenerationId: prevId,
+            aspectRatio: "9:16",
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Kunne ikke starte klip.");
+        const videoUrl = await pollSegment(data.id);
+        prevId = data.id;
+        segments.push({ id: data.id, videoUrl });
+        setFlythroughSegments([...segments]);
+        setFlythroughProgress({ done: i + 1, total: totalSegments });
+      }
+      setFlythroughStatus("ready");
+    } catch (err) {
+      setFlythroughError(err.message);
+      setFlythroughStatus("error");
+    }
+  };
+
+  useEffect(() => {
+    const el = flythroughVideoRef.current;
+    if (!el || flythroughStatus !== "ready" || flythroughSegments.length === 0) return;
+    el.src = flythroughSegments[flythroughPlayIndex]?.videoUrl;
+    el.play().catch(() => {});
+  }, [flythroughPlayIndex, flythroughStatus]);
+
+  const handleFlythroughEnded = () => {
+    setFlythroughPlayIndex((i) => (i + 1 < flythroughSegments.length ? i + 1 : 0));
+  };
 
   const togglePlay = () => {
     if (isPlaying) {
@@ -626,7 +712,42 @@ function Rundvis() {
               <Icon name="music" size={13} /> Blød baggrundsmusik
             </label>
 
-            <button onClick={() => setStep(3)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> Ret manuskript</button>
+            <div className="pt-6 mt-2 border-t" style={{ borderColor: LINE }}>
+              <h2 className="font-display text-lg mb-1">AI-gennemgang <span className="text-xs font-normal" style={{ color: MUTED }}>(eksperimentel)</span></h2>
+              <p className="text-xs mb-4" style={{ color: MUTED }}>
+                Genererer én sammenhængende kamera-gennemgang ud fra de første {Math.min(images.length, MAX_FLYTHROUGH_IMAGES)} billeder, uden voiceover.
+                Tager typisk 1-3 minutter og koster reelt per klip hos Luma — brug med måde under test.
+              </p>
+
+              {flythroughStatus === "idle" && (
+                <button onClick={runFlythrough} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium" style={{ backgroundColor: ACCENT, color: "#fff" }}>
+                  <Icon name="sparkles" size={15} /> Generér AI-gennemgang
+                </button>
+              )}
+
+              {(flythroughStatus === "uploading" || flythroughStatus === "generating") && (
+                <div className="flex items-center gap-2 text-sm" style={{ color: MUTED }}>
+                  <Icon name="loader" size={15} />
+                  {flythroughStatus === "uploading" ? "Uploader billeder…" : `Genererer klip ${flythroughProgress.done}/${flythroughProgress.total}…`}
+                </div>
+              )}
+
+              {flythroughStatus === "error" && <p className="text-xs" style={{ color: AMBER }}>{flythroughError}</p>}
+
+              {flythroughSegments.length > 0 && (
+                <div className="relative rounded-lg overflow-hidden mt-4" style={{ backgroundColor: "#000", aspectRatio: "9/16", maxWidth: 320 }}>
+                  <video ref={flythroughVideoRef} className="w-full h-full object-cover" autoPlay playsInline onEnded={handleFlythroughEnded} />
+                </div>
+              )}
+
+              {flythroughStatus === "ready" && (
+                <button onClick={runFlythrough} className="flex items-center gap-1.5 text-xs mt-3" style={{ color: MUTED }}>
+                  <Icon name="rotate" size={12} /> Generér forfra
+                </button>
+              )}
+            </div>
+
+            <button onClick={() => setStep(3)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm mt-6" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> Ret manuskript</button>
           </section>
         )}
       </main>
