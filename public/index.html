@@ -390,7 +390,7 @@ function Rundvis() {
 
   const allVoicesReady = voices.length === scenes.length && voices.every((v) => v && v.status === "ready");
 
-  // ---- AI-gennemgang (experimental): chained Luma Ray-2 clips, no voiceover ----
+  // ---- AI-gennemgang (experimental): independent image-to-image Luma clips, no voiceover ----
   const MAX_FLYTHROUGH_IMAGES = 8;
 
   const uploadImageForFlythrough = async (src, index) => {
@@ -430,23 +430,25 @@ function Rundvis() {
       setFlythroughStatus("generating");
       const totalSegments = urls.length - 1;
       setFlythroughProgress({ done: 0, total: totalSegments });
-      let prevId = null;
       const segments = [];
       for (let i = 0; i < totalSegments; i++) {
+        // Each segment is an independent image-to-image interpolation
+        // between two consecutive stills (Luma's API does not allow
+        // combining a "continue from previous clip" reference with a new
+        // target image in one call, so segments are not motion-chained —
+        // they are simply played back-to-back in the browser).
         const res = await fetch("/api/generate-flythrough/create-segment", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            startImageUrl: prevId ? undefined : urls[i],
+            startImageUrl: urls[i],
             endImageUrl: urls[i + 1],
-            prevGenerationId: prevId,
             aspectRatio: "9:16",
           }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Kunne ikke starte klip.");
         const videoUrl = await pollSegment(data.id);
-        prevId = data.id;
         segments.push({ id: data.id, videoUrl });
         setFlythroughSegments([...segments]);
         setFlythroughProgress({ done: i + 1, total: totalSegments });

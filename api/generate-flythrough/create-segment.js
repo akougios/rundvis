@@ -1,10 +1,13 @@
-// Serverless function (Vercel) — starts ONE Luma Ray video generation segment.
-// Called repeatedly by the browser to build a chained "flythrough": each
-// new segment continues the camera motion from the end of the previous
-// generation (video.start_frame = {generation_id: prevId}) toward the next
-// still image (video.end_frame = {url: endImageUrl}). The very first
-// segment in a chain has no previous generation, so it starts from a
-// static image instead (video.start_frame = {url: startImageUrl}).
+// Serverless function (Vercel) — starts ONE Luma Ray video generation segment:
+// a plain image-to-image interpolation between two still photos.
+//
+// Earlier versions tried to chain segments by referencing the previous
+// generation as the next segment's start_frame (to simulate one continuous
+// camera move). Luma's current API rejects that combination:
+// "generation-ref keyframes are only supported for video extend (a single
+// start_frame OR end_frame generation reference); interpolate-from-generation
+// is not yet available." So each segment is generated independently from two
+// image URLs, and the browser plays the resulting clips back-to-back.
 //
 // Luma generations are asynchronous — this returns immediately with an id
 // and a "queued"/"processing" state. The browser polls /status for completion.
@@ -12,8 +15,7 @@
 // NOTE: Luma retired the legacy api.lumalabs.ai/dream-machine/v1 API in
 // favor of the new Agents API (agents.lumalabs.ai/v1). New API keys
 // (the "luma-api-..." keys issued from platform.lumalabs.ai) only work
-// against the new API — that's what caused the "Not authenticated" errors
-// when this was still pointed at the old endpoint.
+// against the new API.
 
 const LUMA_BASE = "https://agents.lumalabs.ai/v1/generations";
 
@@ -31,20 +33,12 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { startImageUrl, endImageUrl, prevGenerationId, aspectRatio } = req.body || {};
+  const { startImageUrl, endImageUrl, aspectRatio } = req.body || {};
 
-  if (!endImageUrl) {
-    res.status(400).json({ error: "Mangler endImageUrl (billedet klippet skal bevæge sig hen imod)." });
+  if (!startImageUrl || !endImageUrl) {
+    res.status(400).json({ error: "Mangler startImageUrl og/eller endImageUrl." });
     return;
   }
-  if (!prevGenerationId && !startImageUrl) {
-    res.status(400).json({ error: "Mangler enten startImageUrl (første klip i kæden) eller prevGenerationId (efterfølgende klip)." });
-    return;
-  }
-
-  const startFrame = prevGenerationId
-    ? { generation_id: prevGenerationId }
-    : { url: startImageUrl };
 
   try {
     const lumaRes = await fetch(LUMA_BASE, {
@@ -61,7 +55,7 @@ export default async function handler(req, res) {
         video: {
           resolution: "720p",
           duration: "5s",
-          start_frame: startFrame,
+          start_frame: { url: startImageUrl },
           end_frame: { url: endImageUrl },
         },
       }),
