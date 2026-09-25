@@ -718,7 +718,7 @@ function Rundvis() {
               <h2 className="font-display text-lg mb-1">AI-gennemgang <span className="text-xs font-normal" style={{ color: MUTED }}>(eksperimentel)</span></h2>
               <p className="text-xs mb-4" style={{ color: MUTED }}>
                 Genererer én sammenhængende kamera-gennemgang ud fra de første {Math.min(images.length, MAX_FLYTHROUGH_IMAGES)} billeder, uden voiceover.
-                Tager typisk 1-3 minutter og koster reelt per klip hos Luma — brug med måde under test.
+                Klip på 10 sek. i 1080p — tager typisk 2-5 minutter og koster reelt per klip hos Luma (dyrere end tidligere test). Brug med måde. Flere billeder (op til 8) giver en længere, mere komplet gennemgang.
               </p>
 
               {flythroughStatus === "idle" && (

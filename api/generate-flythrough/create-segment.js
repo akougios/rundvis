@@ -50,11 +50,11 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: "ray-3.2",
         type: "video",
-        prompt: "Smooth, slow cinematic camera glide through a real estate interior, professional real-estate walkthrough style, stable and steady motion, no jump cuts.",
+        prompt: "Real estate drone walkthrough video. The camera moves steadily forward, floating smoothly like a drone or steadicam through the interior of a home, gliding from one space toward the next as if continuing into the next room. Cinematic, professional real-estate listing footage, wide field of view, slow and deliberate forward motion, gentle parallax, no jump cuts, no shaking, no zoom-in-place — continuous glide only.",
         aspect_ratio: aspectRatio || "9:16",
         video: {
-          resolution: "720p",
-          duration: "5s",
+          resolution: "1080p",
+          duration: "10s",
           start_frame: { url: startImageUrl },
           end_frame: { url: endImageUrl },
         },
