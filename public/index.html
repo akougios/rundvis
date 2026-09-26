@@ -179,7 +179,8 @@ function Rundvis() {
 
   const [flythroughStatus, setFlythroughStatus] = useState("idle"); // idle|uploading|generating|ready|error
   const [flythroughError, setFlythroughError] = useState("");
-  const [flythroughSegments, setFlythroughSegments] = useState([]); // [{id, videoUrl}]
+  const [flythroughSegments, setFlythroughSegments] = useState([]); // [{index, status:'pending'|'generating'|'ready'|'error', videoUrl, error}]
+  const [flythroughImageUrls, setFlythroughImageUrls] = useState([]); // uploaded blob URLs, kept around so a single segment can be regenerated without re-uploading
   const [flythroughProgress, setFlythroughProgress] = useState({ done: 0, total: 0 });
   const [flythroughPlayIndex, setFlythroughPlayIndex] = useState(0);
   const [flythroughActiveSlot, setFlythroughActiveSlot] = useState("A");
@@ -394,12 +395,31 @@ function Rundvis() {
 
   // ---- AI-gennemgang (experimental): independent image-to-image Luma clips, no voiceover ----
   const MAX_FLYTHROUGH_IMAGES = 8;
+  const FLYTHROUGH_MAX_DIMENSION = 1600; // client-side resize cap before upload - Luma renders at 720p anyway, so a full-res phone photo (often 5-15MB) only slows the upload and inflates storage for no visual gain
+
+  // Downscale a data-URL image in the browser (canvas) before it's uploaded.
+  const resizeImageDataUrl = (dataUrl, maxDimension) =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+        if (scale >= 1) { resolve(dataUrl); return; }
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.85));
+      };
+      img.onerror = () => resolve(dataUrl); // fall back to the original if decoding fails
+      img.src = dataUrl;
+    });
 
   const uploadImageForFlythrough = async (src, index) => {
+    const resized = await resizeImageDataUrl(src, FLYTHROUGH_MAX_DIMENSION);
     const res = await fetch("/api/upload-image", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dataUrl: src, filename: `rundvis-${Date.now()}-${index}.jpg` }),
+      body: JSON.stringify({ dataUrl: resized, filename: `rundvis-${Date.now()}-${index}.jpg` }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Upload fejlede.");
@@ -418,10 +438,53 @@ function Rundvis() {
     }
   };
 
+  // Generates (or regenerates) exactly ONE segment and writes the result into
+  // flythroughSegments[index] only - every other segment is left untouched,
+  // so a single glitchy/off clip can be retried without redoing (and paying
+  // for) the whole sequence again. AI video generation is not 100% reliable
+  // per attempt, so this per-clip retry is the main quality control lever.
+  const generateOneSegment = async (index, urls, total) => {
+    setFlythroughSegments((prev) => {
+      const n = [...prev];
+      n[index] = { ...(n[index] || {}), index, status: "generating", error: null };
+      return n;
+    });
+    try {
+      const res = await fetch("/api/generate-flythrough/create-segment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          startImageUrl: urls[index],
+          endImageUrl: urls[index + 1],
+          aspectRatio: "9:16",
+          segmentIndex: index,
+          totalSegments: total,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Kunne ikke starte klip.");
+      const videoUrl = await pollSegment(data.id);
+      setFlythroughSegments((prev) => {
+        const n = [...prev];
+        n[index] = { index, status: "ready", videoUrl, error: null };
+        return n;
+      });
+      return true;
+    } catch (err) {
+      setFlythroughSegments((prev) => {
+        const n = [...prev];
+        n[index] = { ...(n[index] || {}), index, status: "error", error: err.message };
+        return n;
+      });
+      return false;
+    }
+  };
+
   const runFlythrough = async () => {
     setFlythroughStatus("uploading");
     setFlythroughError("");
     setFlythroughSegments([]);
+    setFlythroughImageUrls([]);
     setFlythroughPlayIndex(0);
     try {
       const used = images.slice(0, MAX_FLYTHROUGH_IMAGES);
@@ -429,48 +492,42 @@ function Rundvis() {
       for (let i = 0; i < used.length; i++) {
         urls.push(await uploadImageForFlythrough(used[i].src, i));
       }
+      setFlythroughImageUrls(urls);
       setFlythroughStatus("generating");
       const totalSegments = urls.length - 1;
+      setFlythroughSegments(Array.from({ length: totalSegments }, (_, i) => ({ index: i, status: "pending", videoUrl: null, error: null })));
       setFlythroughProgress({ done: 0, total: totalSegments });
-      const segments = [];
       for (let i = 0; i < totalSegments; i++) {
         // Each segment is an independent image-to-image interpolation
         // between two consecutive stills (Luma's API does not allow
         // combining a "continue from previous clip" reference with a new
         // target image in one call, so segments are not motion-chained —
         // they are simply played back-to-back in the browser).
-        const res = await fetch("/api/generate-flythrough/create-segment", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            startImageUrl: urls[i],
-            endImageUrl: urls[i + 1],
-            aspectRatio: "9:16",
-            segmentIndex: i,
-            totalSegments,
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Kunne ikke starte klip.");
-        const videoUrl = await pollSegment(data.id);
-        segments.push({ id: data.id, videoUrl });
-        setFlythroughSegments([...segments]);
+        await generateOneSegment(i, urls, totalSegments);
         setFlythroughProgress({ done: i + 1, total: totalSegments });
       }
-      setFlythroughStatus("ready");
+      setFlythroughStatus("done");
     } catch (err) {
       setFlythroughError(err.message);
       setFlythroughStatus("error");
     }
   };
 
+  const regenerateSegment = (index) => {
+    generateOneSegment(index, flythroughImageUrls, flythroughSegments.length);
+  };
+
+  const allSegmentsReady = flythroughSegments.length > 0 && flythroughSegments.every((s) => s && s.status === "ready");
+
   // Crossfade playback: two stacked <video> elements, alternated so the
   // outgoing clip's last frame dissolves into the incoming clip's first
   // frame instead of hard-cutting. Consecutive segments already share the
   // same still image at their boundary (segment N's end image == segment
-  // N+1's start image), so the fade lands on matching content.
+  // N+1's start image), so the fade lands on matching content. Re-runs
+  // whenever the full set becomes ready, including after a manual
+  // per-segment regenerate.
   useEffect(() => {
-    if (flythroughStatus !== "ready" || flythroughSegments.length === 0) return;
+    if (!allSegmentsReady) return;
     const el = flythroughVideoARef.current;
     if (!el) return;
     el.src = flythroughSegments[0]?.videoUrl;
@@ -479,10 +536,10 @@ function Rundvis() {
     setFlythroughActiveSlot("A");
     setFlythroughPlayIndex(0);
     // eslint-disable-next-line
-  }, [flythroughStatus]);
+  }, [allSegmentsReady]);
 
   const handleFlythroughEnded = () => {
-    if (flythroughSegments.length === 0) return;
+    if (!allSegmentsReady) return;
     const next = (flythroughPlayIndex + 1) % flythroughSegments.length;
     const nextUrl = flythroughSegments[next]?.videoUrl;
     const activeIsA = flythroughActiveSlot === "A";
@@ -751,10 +808,18 @@ function Rundvis() {
             <div className={scenes.length > 0 ? "pt-6 mt-2 border-t" : ""} style={{ borderColor: LINE }}>
               {scenes.length === 0 && <h1 className="font-display text-2xl mb-1">AI-gennemgang</h1>}
               {scenes.length > 0 && <h2 className="font-display text-lg mb-1">AI-gennemgang <span className="text-xs font-normal" style={{ color: MUTED }}>(eksperimentel)</span></h2>}
-              <p className="text-xs mb-4" style={{ color: MUTED }}>
-                Genererer én kamera-gennemgang ud fra de første {Math.min(images.length, MAX_FLYTHROUGH_IMAGES)} billeder, uden voiceover. Upload i den rækkefølge man skal bevæge sig: facade/udefra først, så indgang, så rum for rum.
-                Klip på 5 sek. i 720p — tager typisk 1-3 minutter og koster reelt per klip hos Luma. Brug med måde mens jeres Luma-saldo er lav. Flere billeder (op til 8) giver en længere, mere komplet gennemgang.
+              <p className="text-xs mb-1" style={{ color: MUTED }}>
+                Genererer en kamera-gennemgang ud fra de første {Math.min(images.length, MAX_FLYTHROUGH_IMAGES)} billeder, uden voiceover. Upload i den rækkefølge man skal bevæge sig: facade/udefra først, så indgang, så rum for rum.
+                Klip på 5 sek. i 720p — tager typisk 1-3 minutter og koster reelt per klip hos Luma. Brug med måde mens jeres Luma-saldo er lav.
               </p>
+              <p className="text-xs mb-4" style={{ color: MUTED }}>
+                Tip til bedre resultat: skarpe, veloplyste billeder uden fisheye-forvrængning og med ryddede rum giver markant færre AI-fejl (bøjede vægge, mærkelige detaljer) end mørke eller rodede billeder.
+              </p>
+              {images.length >= 2 && flythroughStatus === "idle" && (
+                <p className="text-xs mb-4" style={{ color: MUTED }}>
+                  Dette genererer <strong style={{ color: TEXT }}>{Math.min(images.length, MAX_FLYTHROUGH_IMAGES) - 1} klip</strong> (~{(Math.min(images.length, MAX_FLYTHROUGH_IMAGES) - 1) * 5} sek. video).
+                </p>
+              )}
 
               {flythroughStatus === "idle" && (
                 <button onClick={runFlythrough} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium" style={{ backgroundColor: ACCENT, color: "#fff" }}>
@@ -762,17 +827,25 @@ function Rundvis() {
                 </button>
               )}
 
-              {(flythroughStatus === "uploading" || flythroughStatus === "generating") && (
+              {flythroughStatus === "uploading" && (
                 <div className="flex items-center gap-2 text-sm" style={{ color: MUTED }}>
-                  <Icon name="loader" size={15} />
-                  {flythroughStatus === "uploading" ? "Uploader billeder…" : `Genererer klip ${flythroughProgress.done}/${flythroughProgress.total}…`}
+                  <Icon name="loader" size={15} /> Uploader billeder…
                 </div>
               )}
 
               {flythroughStatus === "error" && <p className="text-xs" style={{ color: AMBER }}>{flythroughError}</p>}
 
-              {flythroughSegments.length > 0 && (
-                <div className="relative rounded-lg overflow-hidden mt-4" style={{ backgroundColor: "#000", aspectRatio: "9/16", maxWidth: 320 }}>
+              {(flythroughStatus === "generating" || flythroughStatus === "done") && flythroughSegments.length > 0 && (
+                <div className="flex items-center gap-2 text-sm mb-4" style={{ color: MUTED }}>
+                  <Icon name="loader" size={15} className={allSegmentsReady ? "hidden" : ""} />
+                  {allSegmentsReady
+                    ? `${flythroughSegments.length} klip klar.`
+                    : `Genererer klip ${flythroughProgress.done}/${flythroughProgress.total}…`}
+                </div>
+              )}
+
+              {allSegmentsReady && (
+                <div className="relative rounded-lg overflow-hidden mb-4" style={{ backgroundColor: "#000", aspectRatio: "9/16", maxWidth: 320 }}>
                   <video ref={flythroughVideoARef} className="absolute inset-0 w-full h-full object-cover transition-opacity duration-500"
                     style={{ opacity: flythroughActiveSlot === "A" ? 1 : 0 }} playsInline onEnded={handleFlythroughEnded} />
                   <video ref={flythroughVideoBRef} className="absolute inset-0 w-full h-full object-cover transition-opacity duration-500"
@@ -780,9 +853,50 @@ function Rundvis() {
                 </div>
               )}
 
-              {flythroughStatus === "ready" && (
-                <button onClick={runFlythrough} className="flex items-center gap-1.5 text-xs mt-3" style={{ color: MUTED }}>
-                  <Icon name="rotate" size={12} /> Generér forfra
+              {flythroughSegments.length > 0 && (flythroughStatus === "generating" || flythroughStatus === "done") && (
+                <div className="mb-4">
+                  <p className="text-[10px] uppercase tracking-wide mb-2" style={{ color: MUTED }}>Klip — gennemse, og lav enkelte om ved behov</p>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {flythroughSegments.map((seg, i) => (
+                      <div key={i} className="rounded-md overflow-hidden" style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}` }}>
+                        <div className="relative" style={{ backgroundColor: "#000", aspectRatio: "9/16" }}>
+                          {seg.status === "ready" && (
+                            <video src={seg.videoUrl} className="w-full h-full object-cover" controls playsInline muted />
+                          )}
+                          {seg.status === "generating" && (
+                            <div className="absolute inset-0 flex items-center justify-center"><Icon name="loader" size={16} style={{ color: MUTED }} /></div>
+                          )}
+                          {seg.status === "error" && (
+                            <div className="absolute inset-0 flex items-center justify-center p-2 text-center"><span className="text-[10px]" style={{ color: AMBER }}>Fejlede</span></div>
+                          )}
+                          {seg.status === "pending" && (
+                            <div className="absolute inset-0 flex items-center justify-center"><span className="text-[10px]" style={{ color: MUTED }}>Venter…</span></div>
+                          )}
+                          <div className="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ backgroundColor: "rgba(0,0,0,0.6)", color: "#fff" }}>{i + 1}</div>
+                        </div>
+                        <div className="flex items-center justify-between px-2 py-1.5">
+                          <button onClick={() => regenerateSegment(i)} disabled={seg.status === "generating"} className="flex items-center gap-1 text-[10px]"
+                            style={{ color: seg.status === "generating" ? MUTED : ACCENT, opacity: seg.status === "generating" ? 0.5 : 1, cursor: seg.status === "generating" ? "default" : "pointer" }}>
+                            <Icon name="rotate" size={10} /> Prøv igen
+                          </button>
+                          {seg.status === "ready" && (
+                            <a href={seg.videoUrl} download={`rundvis-klip-${i + 1}.mp4`} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-[10px]" style={{ color: MUTED }}>
+                              <Icon name="upload" size={10} className="rotate-180" /> Gem
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] mt-2" style={{ color: MUTED }}>
+                    Videolinks fra Luma udløber efter ca. 1 time — gem de klip I vil beholde ("Gem"-knappen) inden da.
+                  </p>
+                </div>
+              )}
+
+              {flythroughStatus === "done" && (
+                <button onClick={runFlythrough} className="flex items-center gap-1.5 text-xs mt-1" style={{ color: MUTED }}>
+                  <Icon name="rotate" size={12} /> Generér hele gennemgangen forfra
                 </button>
               )}
             </div>
