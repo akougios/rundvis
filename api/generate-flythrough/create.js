@@ -40,17 +40,19 @@ const FPS = 24;
 // entering, instead of a clean forward approach.
 const FLYTHROUGH_PROMPT =
   "Smooth, continuous real-estate walkthrough video shot from a single " +
-  "moving camera, like a drone or steadicam gliding forward through the " +
-  "property. The camera always moves forward, in the same direction the " +
-  "images are ordered: it starts outside showing the building's facade, " +
-  "advances toward and through the front door, then continues forward " +
-  "from room to room in the exact sequence of the provided photos. The " +
-  "camera never moves backward, never retreats away from the building, " +
-  "never reverses direction, and never revisits a room or view it has " +
-  "already passed through. Natural walking-pace speed, level horizon, " +
-  "realistic architecture and lighting, no warped walls or floating " +
-  "objects, photorealistic quality suitable for a professional real " +
-  "estate listing.";
+  "moving camera, like a slow, calm steadicam gliding forward through the " +
+  "property at an unhurried, deliberate pace - not a fast drone flythrough. " +
+  "The camera always moves forward, in the same direction the images are " +
+  "ordered: it starts outside showing the building's facade, advances " +
+  "slowly toward and through the front door, then continues forward from " +
+  "room to room in the exact sequence of the provided photos, pausing " +
+  "briefly and lingering in each space rather than rushing through it. " +
+  "The camera never moves backward, never retreats away from the " +
+  "building, never reverses direction, and never revisits a room or view " +
+  "it has already passed through. Gentle, slow, natural walking-pace " +
+  "speed, level horizon, realistic architecture and lighting, no warped " +
+  "walls or floating objects, photorealistic quality suitable for a " +
+  "professional real estate listing.";
 
 function buildKeyframeIndexes(count, maxFrame) {
   // Evenly spread `count` keyframes across [0, maxFrame], first at 0 and
