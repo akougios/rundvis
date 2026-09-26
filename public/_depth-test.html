@@ -1,0 +1,86 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Depth estimation test</title>
+<style>
+  html, body { margin: 0; background: #111; color: #eee; font-family: sans-serif; }
+  #log { position: fixed; top: 0; left: 0; right: 0; background: rgba(0,0,0,0.85); padding: 8px; font-size: 12px; white-space: pre-wrap; max-height: 45vh; overflow: auto; z-index: 10; }
+  .row { display: flex; gap: 8px; margin-top: 46vh; padding: 8px; }
+  canvas, img { max-width: 45vw; border: 1px solid #444; }
+</style>
+</head>
+<body>
+<div id="log">booting…</div>
+<div class="row">
+  <img id="srcImg" crossorigin="anonymous" src="https://upload.wikimedia.org/wikipedia/commons/thumb/a/a3/Suburban_house_in_Michigan.jpg/640px-Suburban_house_in_Michigan.jpg" />
+  <canvas id="depthCanvas"></canvas>
+</div>
+
+<script type="module">
+const logEl = document.getElementById("log");
+function log(msg) {
+  console.log(msg);
+  logEl.textContent += "\n" + msg;
+}
+
+async function run() {
+  const t0 = performance.now();
+  log("starting transformers.js import…");
+  let pipeline;
+  try {
+    const mod = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.5");
+    pipeline = mod.pipeline;
+    log("import OK in " + Math.round(performance.now() - t0) + "ms, pipeline=" + typeof pipeline);
+  } catch (err) {
+    log("IMPORT ERROR: " + err.message);
+    return;
+  }
+
+  try {
+    log("loading depth-estimation model (onnx-community/depth-anything-v2-small, q8)…");
+    const t1 = performance.now();
+    const estimator = await pipeline("depth-estimation", "onnx-community/depth-anything-v2-small", { dtype: "q8" });
+    log("model loaded in " + Math.round(performance.now() - t1) + "ms");
+
+    const img = document.getElementById("srcImg");
+    await new Promise((resolve, reject) => {
+      if (img.complete) return resolve();
+      img.onload = resolve;
+      img.onerror = () => reject(new Error("source image failed to load"));
+    });
+    log("source image loaded: " + img.naturalWidth + "x" + img.naturalHeight);
+
+    const t2 = performance.now();
+    const output = await estimator(img.src);
+    log("depth estimation done in " + Math.round(performance.now() - t2) + "ms");
+    log("output keys: " + Object.keys(output).join(", "));
+
+    if (output.depth) {
+      const depthImg = output.depth; // usually a RawImage-like object with .toCanvas() in transformers.js
+      let depthCanvas;
+      if (typeof depthImg.toCanvas === "function") {
+        depthCanvas = depthImg.toCanvas();
+        log("used depth.toCanvas(), size " + depthCanvas.width + "x" + depthCanvas.height);
+      } else {
+        log("depth.toCanvas not a function, depth object: " + JSON.stringify(Object.keys(depthImg)));
+      }
+      if (depthCanvas) {
+        const target = document.getElementById("depthCanvas");
+        target.width = depthCanvas.width;
+        target.height = depthCanvas.height;
+        target.getContext("2d").drawImage(depthCanvas, 0, 0);
+        log("SUCCESS: depth map drawn to canvas.");
+      }
+    } else {
+      log("no output.depth field - full output: " + JSON.stringify(Object.keys(output)));
+    }
+  } catch (err) {
+    log("ERROR: " + err.message + "\n" + (err.stack || ""));
+  }
+}
+
+run();
+</script>
+</body>
+</html>
