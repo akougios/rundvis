@@ -108,4 +108,14 @@ nuværende opsætning, og som konsekvent gav et korrekt resultat i test.
 Flere af de tidligere varianter viste samme fejl undervejs: kameraet
 bevægede sig nogle gange baglæns/væk fra huset i stedet for fremad gennem
 døren, formentlig fordi for få/for ens billeder gav modellen for lidt
+retningssignal at holde sig til. Selv 4-billeders opsætningen kan dog
+stadig i sjældne tilfælde give samme resultat (Luma har ingen
+seed-parameter), så prompten er siden gjort langt mere eksplicit om
+præcis hvad billede 1 viser (facade, stillestående kamera) og hvad
+kameraet skal gøre derfra (kun fremad, aldrig væk fra huset), og
+kaldet sender nu også Luma's strukturerede "camera concept"
+`push_in` (docs.lumalabs.ai/changelog/concepts) som et ekstra,
+maskinlæsbart retningshint ud over selve prompt-teksten - med
+automatisk retry uden det felt, hvis Luma skulle afvise kaldet fordi
+det ikke understøttes sammen med multi-keyframe.
 retningssignal at holde sig til.
