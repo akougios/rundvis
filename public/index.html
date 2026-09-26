@@ -186,6 +186,9 @@ function Rundvis() {
   const [flythroughActiveSlot, setFlythroughActiveSlot] = useState("A");
   const flythroughVideoARef = useRef(null);
   const flythroughVideoBRef = useRef(null);
+  const [flythroughStills, setFlythroughStills] = useState([]); // local data-URLs of the images actually used, for the guaranteed-identical opening freeze frame
+  const [showIntroFreeze, setShowIntroFreeze] = useState(false);
+  const introFreezeTimerRef = useRef(null);
 
   const fileInputRef = useRef(null);
   const audioRef = useRef(null);
@@ -488,6 +491,7 @@ function Rundvis() {
     setFlythroughPlayIndex(0);
     try {
       const used = images.slice(0, MAX_FLYTHROUGH_IMAGES);
+      setFlythroughStills(used.map((img) => img.src));
       const urls = [];
       for (let i = 0; i < used.length; i++) {
         urls.push(await uploadImageForFlythrough(used[i].src, i));
@@ -535,6 +539,13 @@ function Rundvis() {
     el.play().catch(() => {});
     setFlythroughActiveSlot("A");
     setFlythroughPlayIndex(0);
+    // Hold on the literal uploaded exterior photo for a beat before the
+    // generated motion takes over. AI video models can drift slightly from
+    // the conditioning image even on frame 0 - this guarantees the viewer
+    // always sees exactly the same, correct starting photo, every time.
+    setShowIntroFreeze(true);
+    if (introFreezeTimerRef.current) clearTimeout(introFreezeTimerRef.current);
+    introFreezeTimerRef.current = setTimeout(() => setShowIntroFreeze(false), 700);
     // eslint-disable-next-line
   }, [allSegmentsReady]);
 
@@ -551,6 +562,11 @@ function Rundvis() {
     }
     setFlythroughActiveSlot(activeIsA ? "B" : "A");
     setFlythroughPlayIndex(next);
+    if (next === 0) {
+      setShowIntroFreeze(true);
+      if (introFreezeTimerRef.current) clearTimeout(introFreezeTimerRef.current);
+      introFreezeTimerRef.current = setTimeout(() => setShowIntroFreeze(false), 700);
+    }
   };
 
   const togglePlay = () => {
@@ -850,6 +866,10 @@ function Rundvis() {
                     style={{ opacity: flythroughActiveSlot === "A" ? 1 : 0 }} playsInline onEnded={handleFlythroughEnded} />
                   <video ref={flythroughVideoBRef} className="absolute inset-0 w-full h-full object-cover transition-opacity duration-500"
                     style={{ opacity: flythroughActiveSlot === "B" ? 1 : 0 }} playsInline onEnded={handleFlythroughEnded} />
+                  {flythroughStills[0] && (
+                    <img src={flythroughStills[0]} alt="" className="absolute inset-0 w-full h-full object-cover transition-opacity duration-500"
+                      style={{ opacity: showIntroFreeze ? 1 : 0, zIndex: 3, pointerEvents: "none" }} />
+                  )}
                 </div>
               )}
 
