@@ -110,30 +110,23 @@ async function estimateDepthCanvas(dataUrl) {
   return output.depth.toCanvas();
 }
 
-// Deterministic per-index camera path (same seededRandom technique as kenBurnsParamsFor above,
-// so it never reshuffles on re-render). Image 0 - the facade/entry photo - always gets a
-// straight push-in for a "walking towards the house" feel; the rest cycle through
-// push/pan/orbit for variety.
+// Deterministic per-index camera-path SPEC (same seededRandom technique as kenBurnsParamsFor
+// above, so it never reshuffles on re-render). This is intentionally abstract - not world-unit
+// vectors - because how far the camera can pan without ever showing outside the photo depends
+// on that photo's own aspect ratio, which isn't known until ParallaxLayer has loaded the image;
+// see ParallaxLayer for where this turns into an actual camera path. Image 0 (the facade/entry
+// photo) always gets a straight push-in; the rest mostly pan - a static camera drifting across
+// the room is how real estate listing videos are actually shot - with push/orbit mixed in.
 function parallaxPathFor(index) {
   const r1 = seededRandom(index * 17.31 + 2.4);
   const r2 = seededRandom(index * 41.7 + 5.1);
   const r3 = seededRandom(index * 9.13 + 7.7);
-  const type = index === 0 ? "push" : ["push", "pan", "orbit"][index % 3];
+  const type = index === 0 ? "push" : ["pan", "push", "pan", "orbit"][index % 4];
   const dirSign = r1 > 0.5 ? 1 : -1;
-  const panAmt = 0.16 + r2 * 0.1;
-  const pushAmt = 0.28 + r3 * 0.16;
+  const panFrac = 0.7 + r2 * 0.3; // 0.7-1.0 of the photo's own available (aspect-driven) headroom
+  const pushFrac = 0.5 + r3 * 0.5; // 0.5-1.0 of the max push-in distance
   const durationMs = 5200 + r2 * 1600; // ~5.2-6.8s, matches the old room-montage pace
-
-  let from = { x: 0, y: 0, z: 0.95 };
-  let to = { x: 0, y: 0, z: 0.95 - pushAmt };
-  if (type === "pan") {
-    from = { x: -dirSign * panAmt * 0.5, y: 0, z: 1.0 };
-    to = { x: dirSign * panAmt * 0.5, y: 0, z: 1.0 - pushAmt * 0.4 };
-  } else if (type === "orbit") {
-    from = { x: -dirSign * panAmt * 0.35, y: dirSign * 0.03, z: 1.02 };
-    to = { x: dirSign * panAmt * 0.55, y: -dirSign * 0.02, z: 1.02 - pushAmt * 0.5 };
-  }
-  return { type, from, to, durationMs };
+  return { type, dirSign, panFrac, pushFrac, durationMs };
 }
 
 function Icon({ name, size = 16, className = "", style = {} }) {
@@ -217,10 +210,10 @@ function SceneLayer({ src, active, isPlaying, getProgress, kbParams, fadeMs }) {
 // One 3D-parallax-animated image layer: builds a depth-displaced mesh from a photo + its
 // depth map and moves a virtual camera through it along a fixed path (see parallaxPathFor).
 // Mirrors SceneLayer's active/fade lifecycle so it can be swapped the exact same way.
-function ParallaxLayer({ src, depthCanvas, active, getProgress, path, fadeMs }) {
+function ParallaxLayer({ src, depthCanvas, active, getProgress, spec, fadeMs }) {
   const containerRef = useRef(null);
   const [faded, setFaded] = useState(false);
-  const sceneRef = useRef(null); // { renderer, scene, camera }
+  const sceneRef = useRef(null); // { renderer, scene, camera, path }
 
   useEffect(() => {
     setFaded(false);
@@ -245,21 +238,32 @@ function ParallaxLayer({ src, depthCanvas, active, getProgress, path, fadeMs }) 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(50, width / height, 0.05, 10);
 
+    const HOME_Z = 1.0; // the camera distance at which the plane is sized to exactly fill the frame
+
     const img = new Image();
     img.onload = () => {
       if (disposed) return;
-      // Size the plane to the photo's own aspect ratio and let it overflow the frame on
-      // the short axis (object-cover style) rather than ever showing letterboxing.
       const aspect = img.width / img.height;
       const frameAspect = width / height;
-      let planeW = 2, planeH = 2 / aspect;
-      if (aspect > frameAspect) { planeH = 2; planeW = 2 * aspect; } else { planeW = 2; planeH = 2 / aspect; }
+      // How tall/wide a plane at HOME_Z actually fills the camera's field of view - the plane
+      // MUST be sized from this, not a fixed number, or (as before) the camera only ever sees a
+      // fraction of it. Cover-fit the photo into that visible rectangle: one axis matches
+      // exactly (the whole photo is visible, nothing cropped), the other overflows only by
+      // however much the photo's own aspect ratio differs from the frame's - the same object-cover
+      // look as the plain CSS room stills, not an artificial extra crop.
+      const fovRad = (camera.fov * Math.PI) / 180;
+      const visibleH = 2 * HOME_Z * Math.tan(fovRad / 2);
+      const visibleW = visibleH * frameAspect;
+      let planeW, planeH;
+      if (aspect > frameAspect) { planeH = visibleH; planeW = planeH * aspect; }
+      else { planeW = visibleW; planeH = planeW / aspect; }
+
       const segments = 60;
       const geometry = new THREE.PlaneGeometry(planeW, planeH, segments, segments);
       const pos = geometry.attributes.position;
       const dctx = depthCanvas.getContext("2d");
       const depthData = dctx.getImageData(0, 0, depthCanvas.width, depthCanvas.height).data;
-      const maxDisplacement = 0.22;
+      const maxDisplacement = 0.16;
       for (let i = 0; i < pos.count; i++) {
         const u = pos.getX(i) / planeW + 0.5;
         const v = 1 - (pos.getY(i) / planeH + 0.5);
@@ -281,7 +285,35 @@ function ParallaxLayer({ src, depthCanvas, active, getProgress, path, fadeMs }) 
       const mesh = new THREE.Mesh(geometry, material);
       scene.add(mesh);
 
-      sceneRef.current = { renderer, scene, camera };
+      // Now that the plane's real size is known, work out how far the camera can pan without
+      // ever drifting past the edge of the photo: exactly the object-cover overflow computed
+      // above (zero on the axis that matched exactly, the aspect-driven amount on the other).
+      const slackX = Math.max(0, (planeW - visibleW) / 2);
+      const slackY = Math.max(0, (planeH - visibleH) / 2);
+      const MAX_PUSH = 0.3 * HOME_Z;
+      const PAN_USE = 0.85;
+      const pushDelta = spec.pushFrac * MAX_PUSH;
+      const axis = slackX >= slackY ? "x" : "y";
+      const slack = axis === "x" ? slackX : slackY;
+      const otherSlack = axis === "x" ? slackY : slackX;
+      const amt = slack * PAN_USE * spec.panFrac;
+      const otherAmt = otherSlack * PAN_USE * 0.5 * spec.panFrac;
+      const vec = (main, other) => (axis === "x" ? { x: main, y: other } : { x: other, y: main });
+
+      let camPath = { from: { x: 0, y: 0, z: HOME_Z }, to: { x: 0, y: 0, z: HOME_Z - pushDelta } };
+      if (spec.type === "pan") {
+        camPath = {
+          from: { ...vec(-spec.dirSign * amt, spec.dirSign * otherAmt * 0.4), z: HOME_Z },
+          to: { ...vec(spec.dirSign * amt, -spec.dirSign * otherAmt * 0.4), z: HOME_Z - pushDelta * 0.35 },
+        };
+      } else if (spec.type === "orbit") {
+        camPath = {
+          from: { ...vec(-spec.dirSign * amt * 0.6, spec.dirSign * otherAmt), z: HOME_Z },
+          to: { ...vec(spec.dirSign * amt * 0.6, -spec.dirSign * otherAmt), z: HOME_Z - pushDelta * 0.6 },
+        };
+      }
+
+      sceneRef.current = { renderer, scene, camera, path: camPath };
     };
     img.src = src;
 
@@ -295,13 +327,15 @@ function ParallaxLayer({ src, depthCanvas, active, getProgress, path, fadeMs }) 
   }, [src, depthCanvas]);
 
   // Drives the camera along its path every frame while active; holds the final frame once not.
+  // Reads the concrete path from sceneRef (built once the photo's real aspect ratio is known -
+  // see above) rather than a prop, since it depends on the loaded image, not just the spec.
   useEffect(() => {
     let raf;
     const renderAt = (t) => {
       const s = sceneRef.current;
-      if (!s || !path) return;
+      if (!s || !s.path) return;
       const e = easeInOutSine(Math.max(0, Math.min(1, t)));
-      const from = path.from, to = path.to;
+      const from = s.path.from, to = s.path.to;
       s.camera.position.set(
         from.x + (to.x - from.x) * e,
         from.y + (to.y - from.y) * e,
@@ -321,7 +355,7 @@ function ParallaxLayer({ src, depthCanvas, active, getProgress, path, fadeMs }) 
     }
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line
-  }, [active, path]);
+  }, [active, spec]);
 
   return (
     <div
@@ -577,7 +611,7 @@ function Rundvis() {
   // always produce the exact same depth maps and therefore the exact same moves. (The old
   // Luma-based AI clip code is still in api/generate-flythrough/ but is no longer wired in here.)
   const MAX_FLYTHROUGH_IMAGES = 8;
-  const FLYTHROUGH_MAX_DIMENSION = 900; // depth estimation + the mesh's texture only need to look good on screen, not at full photo resolution - keeps inference to a few seconds per photo
+  const FLYTHROUGH_MAX_DIMENSION = 1100; // depth estimation + the mesh's texture only need to look good on screen, not at full photo resolution - keeps inference to a few seconds per photo
 
   // Downscale a data-URL image in the browser (canvas) before depth estimation.
   const resizeImageDataUrl = (dataUrl, maxDimension) =>
@@ -590,7 +624,7 @@ function Rundvis() {
         canvas.width = Math.round(img.width * scale);
         canvas.height = Math.round(img.height * scale);
         canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.88));
+        resolve(canvas.toDataURL("image/jpeg", 0.92));
       };
       img.onerror = () => resolve(dataUrl); // fall back to the original if decoding fails
       img.src = dataUrl;
@@ -953,7 +987,7 @@ function Rundvis() {
                       depthCanvas={flythroughDepths[flythroughPrevIndex]}
                       active={false}
                       getProgress={() => 1}
-                      path={flythroughParams[flythroughPrevIndex]}
+                      spec={flythroughParams[flythroughPrevIndex]}
                       fadeMs={1000}
                     />
                   )}
@@ -963,7 +997,7 @@ function Rundvis() {
                     depthCanvas={flythroughDepths[flythroughIndex]}
                     active={true}
                     getProgress={getFlythroughProgress}
-                    path={flythroughParams[flythroughIndex]}
+                    spec={flythroughParams[flythroughIndex]}
                     fadeMs={1000}
                   />
                 </div>
