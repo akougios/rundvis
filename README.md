@@ -69,22 +69,30 @@ Sæt `ANTHROPIC_API_KEY` i en `.env` fil eller via `vercel env pull` først.
 
 En separat, dyrere pipeline der genererer en ægte AI-video (ikke CSS-simuleret)
 ud fra op til 8 billeder, via Luma Ray (model `ray-3.2`, Luma's nuværende
-Agents API på `agents.lumalabs.ai/v1`). Da Luma's API kun understøtter 2
-keyframes (start/slut) per kald — ikke ét sammenhængende klip med mange
-billeder — er det bygget som en **kæde af klip**: hvert nyt klip fortsætter
-kamerabevægelsen fra slutningen af det forrige (`video.start_frame:
-{generation_id: <forrige klips id>}`) mod næste stillbillede
-(`video.end_frame: {url: ...}`). Browseren afspiller segmenterne i træk ved
-at skifte `<video>`-kildens `src` når hvert klip slutter.
+Agents API på `agents.lumalabs.ai/v1`). Den bruger Luma's **multi-keyframe
+mode**: alle billederne sendes i ét samlet kald (`video.keyframes` — op til
+64 billeder — + `video.keyframe_indexes`, som placerer hvert billede jævnt
+fordelt på en tids-akse), i stedet for at kæde flere separate 2-billede-klip
+sammen. Det betyder Luma ser hele rækkefølgen på én gang og planlægger ÉT
+sammenhængende, fremadrettet kamera-flow hen over den — hvilket var
+nødvendigt for at løse to problemer med den tidligere kæde-tilgang: klip der
+nogle gange bevægede sig baglæns/væk fra huset, og synligt "rodet" limede
+overgange mellem separat genererede klip.
+
+Prompten (hardkodet server-side, i `api/generate-flythrough/create.js`)
+beder eksplicit om en kamera-bevægelse der **kun bevæger sig fremad** —
+aldrig baglæns, aldrig væk fra bygningen — i nøjagtig den rækkefølge
+billederne er uploadet i (facade → dør → rum → rum...).
 
 **Vigtigt om Luma-nøgler:** Luma migrerede i 2026 til en ny API
 (`agents.lumalabs.ai`, nøgler i formatet `luma-api-...`). Den gamle
 `api.lumalabs.ai/dream-machine/v1`-integration accepterer ikke disse nye
 nøgler og fejler med "Not authenticated" — koden her bruger den nye API.
 
-Vigtigt: dette er ikke ét enkelt uafbrudt kamera-flow — det er en kæde af
-5-sekunders klip der hver fortsætter bevægelsen fra det forrige. Kvaliteten
-af overgangene bør testes på rigtige boligbilleder før det bruges i praksis.
-Ingen voiceover i denne pipeline; kun det visuelle (+ evt. den eksisterende
-ambient baggrundsmusik, som endnu ikke er koblet på afspilleren for dette
-flow).
+Der genereres nu kun ÉN video for hele gennemgangen (5 sek. ved præcis 2
+billeder, ellers 10 sek.) — ikke længere separate klip man kan regenerere
+enkeltvis. Fejler resultatet, må hele gennemgangen genereres forfra
+("Generér forfra"-knappen). Kvaliteten bør stadig testes på rigtige
+boligbilleder før det bruges i praksis. Ingen voiceover i denne pipeline;
+kun det visuelle (+ evt. den eksisterende ambient baggrundsmusik, som endnu
+ikke er koblet på afspilleren for dette flow).
