@@ -65,40 +65,43 @@ Sæt `ANTHROPIC_API_KEY` i en `.env` fil eller via `vercel env pull` først.
 - **Der er ingen eksport til mp4/delbar fil** — kun live-afspilning i browseren.
 - Ingen database, ingen brugerlogin, ingen betaling — ren UX/flow-prototype.
 
-## AI-gennemgang (eksperimentel, `/api/generate-flythrough/*`)
+## AI-gennemgang (eksperimentel)
 
-Matcher hvordan rigtige ejendomsvideoer typisk er klippet: IKKE én lang
-AI-genereret flyvetur gennem alle rum (Luma har intet begreb om en
-plantegning eller rum-rækkefølge udover "disse to billeder, i denne
-rækkefølge" — at bede den navigere mange rum i ét AI-kald var netop det,
-der fik den til at finde på baglæns bevægelse og rodede overgange). I
-stedet:
+**Status: 100% deterministisk, ingen AI-videogenerering.** Der er ikke
+længere noget Luma-kald i dette flow (`api/generate-flythrough/*` ligger
+stadig i repoet, men bruges ikke af frontend'en for øjeblikket) - se
+"Historik" nedenfor for hvorfor.
 
-1. **Ét kort, ægte AI-klip** (`api/generate-flythrough/create.js`, Luma Ray
-   `ray-3.2`, 5 sek., 720p) der viser kameraet bevæge sig fra facade-billedet
-   og ind ad hoveddøren til det første indendørs billede. Kun disse 2
-   billeder sendes nogensinde til Luma, uanset hvor mange rum-billeder man
-   uploader — billigt og pålideligt, fordi det er én veldefineret overgang
-   i stedet for en hel rute.
-2. **Resten af billederne** (rum for rum) vises som en pan/zoom-montage
-   (Ken Burns-effekt) direkte i browseren — samme teknik som den
-   scriptede/voiceover-visning øverst i appen (`kenBurnsParamsFor`,
-   `SceneLayer`). Ingen AI involveret her, så ingen risiko for AI-fejl i
-   rum-billederne, og ingen ekstra Luma-omkostning. Hvert billede vises i
-   en varieret varighed (nogle hurtige, nogle langsomme zooms) for et mere
-   levende, redigeret udtryk, med bløde crossfades mellem dem.
+Viser de første 8 uploadede billeder som en rolig fotomontage, i rækkefølge
+(facade → indgang → rum for rum), genbruger samme `SceneLayer`/
+`kenBurnsParamsFor`-teknik som den scriptede voiceover-visning ovenfor.
+Facade-billedet (det første) får en langsommere, mere markant "push in"-
+zoom for at sælge fornemmelsen af at nærme sig huset; resten af billederne
+skifter mellem en næsten umærkelig zoom eller panorering (aldrig begge på
+samme tid), hver holdt i 5,8-7,6 sekunder - et klassisk, roligt
+boligfremvisnings-udtryk. Ingen upload, intet netværkskald, ingen
+Luma-omkostning, og afspilningen starter øjeblikkeligt.
 
-Kun indgangsklippet kan gemmes som en selvstændig videofil (linket fra Luma
-udløber efter ca. 1 time) — rum-montagen er i skrivende stund kun en live
-visning på siden, ikke en samlet eksporterbar videofil (samme begrænsning
-som den scriptede voiceover-visning: "Der er ingen eksport til mp4" gælder
-stadig).
+### Historik: hvorfor ikke AI-video?
 
-**Vigtigt om Luma-nøgler:** Luma migrerede i 2026 til en ny API
-(`agents.lumalabs.ai`, nøgler i formatet `luma-api-...`). Den gamle
-`api.lumalabs.ai/dream-machine/v1`-integration accepterer ikke disse nye
-nøgler og fejler med "Not authenticated" — koden her bruger den nye API.
+Der blev afprøvet seks forskellige AI-genererede varianter for netop
+"facade → ind ad hoveddøren"-overgangen: kædede per-segment-klip, ét
+multi-keyframe-kald med hele billedserien, multi-keyframe med kun 2
+billeder, 2-punkts `start_frame`/`end_frame`, forskellige prompt-ordlyde
+(inkl. Luma's dokumenterede "camera push in"-frase), og til sidst
+multi-keyframe med 4 billeder (facade + indgang + 2 rum), som gav et godt
+resultat én gang. Alle varianter viste før eller siden samme fejl: kameraet
+bevægede sig nogle gange baglæns/væk fra huset i stedet for fremad gennem
+døren.
 
-Ingen voiceover i denne pipeline; kun det visuelle (+ evt. den eksisterende
-ambient baggrundsmusik, som endnu ikke er koblet på afspilleren for dette
-flow).
+Luma's egen FAQ bekræfter at der ikke findes en `seed`-parameter og ingen
+måde at få reproducerbart output på: "Each generation uses a different
+random seed and there is no public seed parameter." Det betyder en
+opsætning der virkede fint én gang sagtens kan give et dårligere resultat
+næste gang, af ren tilfældighed - hvilket gør AI-video uegnet, når kravet
+er et *konsistent* resultat hver gang. Derfor er hele funktionen nu
+deterministisk pan/zoom på de rigtige billeder i stedet.
+
+Der er ingen eksport til mp4/delbar fil for denne visning heller - kun
+live-afspilning i browseren, ligesom den scriptede voiceover-visning
+ovenfor.
