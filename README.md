@@ -67,58 +67,71 @@ Sæt `ANTHROPIC_API_KEY` i en `.env` fil eller via `vercel env pull` først.
 
 ## AI-gennemgang (eksperimentel)
 
-Genererer ét ægte AI-videoklip (Luma, `api/generate-flythrough/*`) for
-selve indgangen — kameraet bevæger sig fra facaden, ind ad hoveddøren og
-ind i det første rum, ud fra kun de første `FLYTHROUGH_ENTRY_KEYFRAME_COUNT`
-(2) uploadede billeder (facade + første rum). Herefter fortsætter
-visningen automatisk som en filmisk pan/zoom-gennemgang af de resterende
-billeder, med `SceneLayer`/`kenBurnsParamsFor`-teknikken fra den scriptede
-voiceover-visning: hvert rum får enten et zoom-ind, et zoom-ud eller en
-panorering som hovedbevægelse, plus en anelse bevægelse på den anden akse
-så det aldrig føles helt fladt/stillestående — dette varierer rum for rum
-(deterministisk pr. billede-indeks, så rækkefølgen af effekter er stabil på
-tværs af genindlæsninger). Hvert rum holdes 5,6-7,6 sekunder.
+Laver en filmisk gennemgang af op til `MAX_FLYTHROUGH_IMAGES` (8) af de
+uploadede billeder, hvor kameraet bevæger sig gennem **hvert** billede i
+ægte 3D — ikke bare et fladt CSS pan/zoom, men en rigtig parallakse-effekt
+hvor forgrund og baggrund bevæger sig forskelligt fra hinanden, som et
+kamera der faktisk bevæger sig i rummet.
 
-**Vigtigt: AI-klippets retning kan ikke garanteres 100 % ens hver gang.**
-Luma's egen FAQ bekræfter at der ikke findes en `seed`-parameter og ingen
-måde at få reproducerbart output på: "Each generation uses a different
-random seed and there is no public seed parameter." Der er testet en lang
-række opsætninger for at gøre resultatet så konsistent som muligt (se
-"Historik" nedenfor) - 4-billeders multi-keyframe med en prompt der
-eksplicit beder om ren fremadgående bevægelse er den mest pålidelige
-opsætning fundet indtil videre, men en enkelt generering kan i sjældne
-tilfælde stadig afvige. Der er en "Prøv igen"-knap i UI'et til at
-genskabe klippet uden at skulle uploade billederne igen.
+Teknikken (se `estimateDepthCanvas`, `parallaxPathFor` og `ParallaxLayer`
+i `public/index.html`):
 
-Kun de første 2 billeder sendes til Luma (koster reelt) - resten vises som
-ren pan/zoom af de rigtige fotos, uden AI. Tager typisk 1-2 minutter at
-generere. Der er ingen eksport til mp4/delbar fil for denne visning - kun
-live-afspilning i browseren, ligesom den scriptede voiceover-visning
-ovenfor.
+1. Hvert billede køres gennem en dybde-estimeringsmodel
+   (`onnx-community/depth-anything-v2-small`, via `@huggingface/transformers`)
+   **direkte i browseren** — ingen server, ingen API-nøgle, ingen
+   per-generering-omkostning.
+2. Dybdekortet bruges til at bygge et forskudt 3D-mesh af billedet
+   (three.js) — nære pixels skubbes mod kameraet, fjerne pixels bliver.
+3. Et virtuelt kamera bevæger sig gennem det mesh langs en fast,
+   deterministisk bane pr. billede-indeks (`push` for facaden/første
+   billede, ellers skiftevis `push`/`pan`/`orbit`), samme
+   `seededRandom`-teknik som resten af appen bruger, så rækkefølgen af
+   bevægelser er stabil på tværs af genindlæsninger.
 
-### Historik: forsøg på at gøre AI-indgangen pålidelig
+Det er **fuldstændig deterministisk**: samme billeder giver altid samme
+dybdekort og dermed samme kamerabevægelse — modsat AI-videogenerering
+(Luma/Runway/Kling), hvor der ikke findes nogen `seed`-parameter, og
+kameraet derfor kan finde på at bevæge sig i en anden retning fra gang til
+gang (se "Historik" nedenfor for den lange række forsøg på at gøre en
+Luma-baseret løsning pålidelig, som endte med at blive opgivet til fordel
+for denne tilgang).
 
-Der er afprøvet seks forskellige AI-genererede varianter for netop
-"facade → ind ad hoveddøren"-overgangen: kædede per-segment-klip, ét
-multi-keyframe-kald med hele billedserien, multi-keyframe med kun 2
-billeder, 2-punkts `start_frame`/`end_frame`, forskellige prompt-ordlyde
-(inkl. Luma's dokumenterede "camera push in"-frase), og til sidst
-multi-keyframe med 4 billeder (facade + indgang + 2 rum), som gav et
-korrekt resultat i test dengang, men senere alligevel viste samme fejl på
-en frisk generering. Flere af de tidligere varianter viste samme fejl
-undervejs: kameraet bevægede sig nogle gange baglæns/væk fra huset i
-stedet for fremad gennem døren. Da flere billeder alene ikke løste det
-holdbart (Luma har ingen seed-parameter, så selv en opsætning der virkede
-én gang kan give et andet resultat næste gang), er opsætningen nu
-skåret ned til kun 2 billeder (facade + første rum, `ENTRY_KEYFRAME_COUNT
-= 2`) med en prompt der er langt mere eksplicit om præcis hvad billede 1
-viser (facade, stillestående kamera) og hvad kameraet skal gøre derfra
-(kun fremad ind i det første rum, aldrig væk fra huset). Kaldet sender nu
-også Luma's strukturerede "camera concept" `push_in`
-(docs.lumalabs.ai/changelog/concepts) som et ekstra, maskinlæsbart
-retningshint ud over selve prompt-teksten - med automatisk retry uden det
-felt, hvis Luma skulle afvise kaldet fordi det ikke understøttes sammen
-med multi-keyframe. Der er stadig ingen garanti for 100 % konsistent
-resultat, kun den mest direkte og eksplicitte retningsstyring afprøvet
-indtil videre.
-retningssignal at holde sig til.
+Beregningen tager typisk et par sekunder pr. billede (model indlæses én
+gang og caches). Der er ingen eksport til mp4/delbar fil for denne visning
+endnu — kun live-afspilning i browseren, ligesom den scriptede
+voiceover-visning ovenfor.
+
+### Historik: fra AI-videogenerering til deterministisk 3D-parallakse
+
+Tidligere brugte AI-gennemgangen Luma AI (`api/generate-flythrough/*`) til
+at generere et rigtigt AI-videoklip for facade → indgang. Koden er stadig
+i repoet, men er ikke længere koblet til frontenden.
+
+Der blev afprøvet en lang række opsætninger for at gøre Luma-klippet
+pålideligt: kædede per-segment-klip, ét multi-keyframe-kald med hele
+billedserien, multi-keyframe med kun 2 billeder, 2-punkts
+`start_frame`/`end_frame`, forskellige prompt-ordlyde (inkl. Luma's
+dokumenterede "camera push in"-frase og det strukturerede "camera concept"
+`push_in`-felt), og til sidst multi-keyframe skåret ned til kun 2 billeder
+med en meget eksplicit prompt. Fejlen gik igen på tværs af næsten alle
+varianter: kameraet bevægede sig nogle gange baglæns/væk fra huset i
+stedet for fremad gennem døren, og fordi Luma ikke har nogen
+seed-parameter, kunne selv en opsætning der virkede én gang give et andet
+resultat næste gang.
+
+Research i konkurrenten Reel-E.ai's tilgang, samt Runway Gen-4.5 og Kling
+AI's API'er, viste at det ikke var en Luma-specifik fejl: struktureret,
+pålidelig kamerastyring findes kun til animation af **ét enkelt billede**
+hos alle tre udbydere — aldrig til interpolation mellem to forskellige
+billeder (dual-image/start-end-frame), som var netop det AI-gennemgangen
+bad om. Det gjorde "kameraet går den forkerte vej"-fejlen til et
+strukturelt, branchebredt problem frem for noget der kunne prompt-fikses
+væk.
+
+Løsningen blev derfor at droppe AI-videogenerering for denne funktion helt
+og erstatte den med ægte, deterministisk 3D-parallakse beregnet lokalt i
+browseren (beskrevet ovenfor) — valideret først i to midlertidige,
+isolerede testsider deployet direkte til Vercel (three.js-rendering af et
+dybde-forskudt mesh, og klient-side dybde-estimering med
+`@huggingface/transformers`), før teknikken blev bygget ind i den rigtige
+app.

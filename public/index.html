@@ -6,6 +6,7 @@
 <title>Rundvis — AI boligvideo prototype</title>
 <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
@@ -78,6 +79,61 @@ function applyKenBurns(el, params, t) {
   const tx = -params.panX / 2 + params.panX * e;
   const ty = -params.panY / 2 + params.panY * e;
   el.style.transform = `scale(${scale.toFixed(4)}) translate(${tx.toFixed(2)}%, ${ty.toFixed(2)}%)`;
+}
+
+// ---- Depth-based 3D parallax ("3D Ken Burns"): a deterministic, non-generative technique.
+// Instead of asking an AI video model to imagine camera motion (which can't be made to always
+// move the same reliable direction - see README history), we estimate a real per-pixel depth map
+// for each uploaded photo directly in the browser (no server, no per-generation AI cost, no
+// randomness) and move a virtual camera through the resulting 3D mesh along a fixed, chosen path.
+// The same photo always produces the exact same depth map and therefore the exact same move.
+
+// Runs a dynamic import() from inside a Babel-transformed script without Babel's parser ever
+// seeing the `import(...)` token (which the default Babel-standalone preset can't parse) - the
+// browser's own engine parses the string body of the Function constructor at call time instead.
+const dynamicImport = (url) => new Function("u", "return import(u)")(url);
+
+let depthEstimatorPromise = null;
+function getDepthEstimator() {
+  if (!depthEstimatorPromise) {
+    depthEstimatorPromise = dynamicImport("https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.5")
+      .then((mod) => mod.pipeline("depth-estimation", "onnx-community/depth-anything-v2-small", { dtype: "q8" }));
+  }
+  return depthEstimatorPromise;
+}
+
+// Estimates depth for a single data-URL photo and returns a same-size grayscale
+// canvas (bright = near the camera, dark = far).
+async function estimateDepthCanvas(dataUrl) {
+  const estimator = await getDepthEstimator();
+  const output = await estimator(dataUrl);
+  return output.depth.toCanvas();
+}
+
+// Deterministic per-index camera path (same seededRandom technique as kenBurnsParamsFor above,
+// so it never reshuffles on re-render). Image 0 - the facade/entry photo - always gets a
+// straight push-in for a "walking towards the house" feel; the rest cycle through
+// push/pan/orbit for variety.
+function parallaxPathFor(index) {
+  const r1 = seededRandom(index * 17.31 + 2.4);
+  const r2 = seededRandom(index * 41.7 + 5.1);
+  const r3 = seededRandom(index * 9.13 + 7.7);
+  const type = index === 0 ? "push" : ["push", "pan", "orbit"][index % 3];
+  const dirSign = r1 > 0.5 ? 1 : -1;
+  const panAmt = 0.16 + r2 * 0.1;
+  const pushAmt = 0.28 + r3 * 0.16;
+  const durationMs = 5200 + r2 * 1600; // ~5.2-6.8s, matches the old room-montage pace
+
+  let from = { x: 0, y: 0, z: 0.95 };
+  let to = { x: 0, y: 0, z: 0.95 - pushAmt };
+  if (type === "pan") {
+    from = { x: -dirSign * panAmt * 0.5, y: 0, z: 1.0 };
+    to = { x: dirSign * panAmt * 0.5, y: 0, z: 1.0 - pushAmt * 0.4 };
+  } else if (type === "orbit") {
+    from = { x: -dirSign * panAmt * 0.35, y: dirSign * 0.03, z: 1.02 };
+    to = { x: dirSign * panAmt * 0.55, y: -dirSign * 0.02, z: 1.02 - pushAmt * 0.5 };
+  }
+  return { type, from, to, durationMs };
 }
 
 function Icon({ name, size = 16, className = "", style = {} }) {
@@ -158,6 +214,124 @@ function SceneLayer({ src, active, isPlaying, getProgress, kbParams, fadeMs }) {
   );
 }
 
+// One 3D-parallax-animated image layer: builds a depth-displaced mesh from a photo + its
+// depth map and moves a virtual camera through it along a fixed path (see parallaxPathFor).
+// Mirrors SceneLayer's active/fade lifecycle so it can be swapped the exact same way.
+function ParallaxLayer({ src, depthCanvas, active, getProgress, path, fadeMs }) {
+  const containerRef = useRef(null);
+  const [faded, setFaded] = useState(false);
+  const sceneRef = useRef(null); // { renderer, scene, camera }
+
+  useEffect(() => {
+    setFaded(false);
+    const t = requestAnimationFrame(() => setFaded(true));
+    return () => cancelAnimationFrame(t);
+  }, [src]);
+
+  // Builds the renderer + depth-displaced mesh once per src/depth pair.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !depthCanvas || typeof THREE === "undefined") return;
+    let disposed = false;
+
+    const width = container.clientWidth || 320;
+    const height = container.clientHeight || 568;
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    container.innerHTML = "";
+    container.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(50, width / height, 0.05, 10);
+
+    const img = new Image();
+    img.onload = () => {
+      if (disposed) return;
+      // Size the plane to the photo's own aspect ratio and let it overflow the frame on
+      // the short axis (object-cover style) rather than ever showing letterboxing.
+      const aspect = img.width / img.height;
+      const frameAspect = width / height;
+      let planeW = 2, planeH = 2 / aspect;
+      if (aspect > frameAspect) { planeH = 2; planeW = 2 * aspect; } else { planeW = 2; planeH = 2 / aspect; }
+      const segments = 60;
+      const geometry = new THREE.PlaneGeometry(planeW, planeH, segments, segments);
+      const pos = geometry.attributes.position;
+      const dctx = depthCanvas.getContext("2d");
+      const depthData = dctx.getImageData(0, 0, depthCanvas.width, depthCanvas.height).data;
+      const maxDisplacement = 0.22;
+      for (let i = 0; i < pos.count; i++) {
+        const u = pos.getX(i) / planeW + 0.5;
+        const v = 1 - (pos.getY(i) / planeH + 0.5);
+        const px = Math.min(depthCanvas.width - 1, Math.max(0, Math.floor(u * depthCanvas.width)));
+        const py = Math.min(depthCanvas.height - 1, Math.max(0, Math.floor(v * depthCanvas.height)));
+        const idx = (py * depthCanvas.width + px) * 4;
+        const depthVal = depthData[idx] / 255; // 0 (far) .. 1 (near)
+        pos.setZ(i, depthVal * maxDisplacement);
+      }
+      geometry.computeVertexNormals();
+
+      const canvasImg = document.createElement("canvas");
+      canvasImg.width = img.width;
+      canvasImg.height = img.height;
+      canvasImg.getContext("2d").drawImage(img, 0, 0);
+      const texture = new THREE.CanvasTexture(canvasImg);
+      texture.needsUpdate = true;
+      const material = new THREE.MeshBasicMaterial({ map: texture });
+      const mesh = new THREE.Mesh(geometry, material);
+      scene.add(mesh);
+
+      sceneRef.current = { renderer, scene, camera };
+    };
+    img.src = src;
+
+    return () => {
+      disposed = true;
+      sceneRef.current = null;
+      renderer.dispose();
+      if (container) container.innerHTML = "";
+    };
+    // eslint-disable-next-line
+  }, [src, depthCanvas]);
+
+  // Drives the camera along its path every frame while active; holds the final frame once not.
+  useEffect(() => {
+    let raf;
+    const renderAt = (t) => {
+      const s = sceneRef.current;
+      if (!s || !path) return;
+      const e = easeInOutSine(Math.max(0, Math.min(1, t)));
+      const from = path.from, to = path.to;
+      s.camera.position.set(
+        from.x + (to.x - from.x) * e,
+        from.y + (to.y - from.y) * e,
+        from.z + (to.z - from.z) * e
+      );
+      s.camera.lookAt(0, 0, 0);
+      s.renderer.render(s.scene, s.camera);
+    };
+    if (active) {
+      const tick = () => {
+        renderAt(getProgress());
+        raf = requestAnimationFrame(tick);
+      };
+      raf = requestAnimationFrame(tick);
+    } else {
+      renderAt(1);
+    }
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line
+  }, [active, path]);
+
+  return (
+    <div
+      ref={containerRef}
+      className={`kb-fade absolute inset-0 w-full h-full ${faded ? "kb-fade-in" : ""}`}
+      style={{ zIndex: active ? 2 : 1, ...(fadeMs ? { transitionDuration: `${fadeMs}ms` } : {}) }}
+    />
+  );
+}
+
 function Rundvis() {
   const [step, setStep] = useState(1);
   const [propertyType, setPropertyType] = useState(null);
@@ -177,18 +351,17 @@ function Rundvis() {
   const [voiceOverallError, setVoiceOverallError] = useState("");
   const [musicOn, setMusicOn] = useState(false);
 
-  const [flythroughStatus, setFlythroughStatus] = useState("idle"); // idle|uploading|generating|done|error
+  // AI-gennemgang state: a deterministic, non-generative "3D Ken Burns" (see the module-level
+  // depth/parallax helpers above) - no AI video generation is involved any more, so there's no
+  // upload step and no video URL to track, just the resized stills and their depth maps.
+  const [flythroughStatus, setFlythroughStatus] = useState("idle"); // idle|processing|done|error
   const [flythroughError, setFlythroughError] = useState("");
-  const [flythroughVideoUrl, setFlythroughVideoUrl] = useState(null); // the one Luma AI clip: exterior -> through the front door
-  const [flythroughImageUrls, setFlythroughImageUrls] = useState([]); // uploaded blob URLs, kept around so the entry clip can be regenerated without re-uploading
-  const flythroughVideoRef = useRef(null);
-  const [flythroughStills, setFlythroughStills] = useState([]); // local data-URLs of the images actually used: [0]=facade, [1]=entry photo (both feed the Luma clip), [2..]=room photos shown as a Ken-Burns montage after it
-  const [showIntroFreeze, setShowIntroFreeze] = useState(false);
-  const introFreezeTimerRef = useRef(null);
-  const [flythroughPhase, setFlythroughPhase] = useState("entry"); // "entry" (playing the Luma clip) | "rooms" (Ken-Burns montage of the remaining photos)
-  const [flythroughRoomIndex, setFlythroughRoomIndex] = useState(0);
-  const [flythroughPrevRoomIndex, setFlythroughPrevRoomIndex] = useState(null);
-  const flythroughRoomStartRef = useRef(0);
+  const [flythroughProgress, setFlythroughProgress] = useState({ current: 0, total: 0 });
+  const [flythroughStills, setFlythroughStills] = useState([]); // resized data-URLs actually used, in upload order
+  const [flythroughDepths, setFlythroughDepths] = useState([]); // matching depth-map canvases, one per still
+  const [flythroughIndex, setFlythroughIndex] = useState(0);
+  const [flythroughPrevIndex, setFlythroughPrevIndex] = useState(null);
+  const flythroughStartRef = useRef(0);
 
   const fileInputRef = useRef(null);
   const audioRef = useRef(null);
@@ -396,18 +569,17 @@ function Rundvis() {
 
   const allVoicesReady = voices.length === scenes.length && voices.every((v) => v && v.status === "ready");
 
-  // ---- AI-gennemgang (experimental): ONE short Luma AI clip for the exterior->through-the-door
-  // arrival, followed by a Ken-Burns pan/zoom montage of the remaining room photos (reusing the
-  // same SceneLayer/kenBurnsParamsFor technique as the scripted voiceover flow above). This
-  // matches how real estate walkthrough videos are actually cut in practice - not one continuous
-  // AI-generated flight through every room (which Luma can't reliably plan structure/order for),
-  // but a real "coming through the door" moment plus a nicely edited slideshow of the individual
-  // rooms. It's also far cheaper: only 2 photos ever go to Luma, no matter how many rooms there are.
+  // ---- AI-gennemgang: a deterministic, non-generative "3D Ken Burns" - see the depth/parallax
+  // helpers near the top of this file. Every uploaded photo (up to MAX_FLYTHROUGH_IMAGES) gets a
+  // real per-pixel depth map estimated entirely client-side, then a virtual camera moves through
+  // the resulting 3D mesh along a fixed path. No AI video generation, no upload, no per-run cost,
+  // and - critically - no risk of the camera "inventing" a wrong direction: the same photos
+  // always produce the exact same depth maps and therefore the exact same moves. (The old
+  // Luma-based AI clip code is still in api/generate-flythrough/ but is no longer wired in here.)
   const MAX_FLYTHROUGH_IMAGES = 8;
-  const FLYTHROUGH_ENTRY_KEYFRAME_COUNT = 2; // must match ENTRY_KEYFRAME_COUNT in api/generate-flythrough/create.js - only facade + first room go into the one AI clip; the rest are shown as a Ken-Burns montage, no AI
-  const FLYTHROUGH_MAX_DIMENSION = 1600; // client-side resize cap before upload - Luma renders at 720p anyway, so a full-res phone photo (often 5-15MB) only slows the upload and inflates storage for no visual gain
+  const FLYTHROUGH_MAX_DIMENSION = 900; // depth estimation + the mesh's texture only need to look good on screen, not at full photo resolution - keeps inference to a few seconds per photo
 
-  // Downscale a data-URL image in the browser (canvas) before it's uploaded.
+  // Downscale a data-URL image in the browser (canvas) before depth estimation.
   const resizeImageDataUrl = (dataUrl, maxDimension) =>
     new Promise((resolve) => {
       const img = new Image();
@@ -418,196 +590,79 @@ function Rundvis() {
         canvas.width = Math.round(img.width * scale);
         canvas.height = Math.round(img.height * scale);
         canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.85));
+        resolve(canvas.toDataURL("image/jpeg", 0.88));
       };
       img.onerror = () => resolve(dataUrl); // fall back to the original if decoding fails
       img.src = dataUrl;
     });
 
-  const uploadImageForFlythrough = async (src, index) => {
-    const resized = await resizeImageDataUrl(src, FLYTHROUGH_MAX_DIMENSION);
-    const res = await fetch("/api/upload-image", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dataUrl: resized, filename: `rundvis-${Date.now()}-${index}.jpg` }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Upload fejlede.");
-    return data.url;
-  };
-
-  const pollGeneration = async (id) => {
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      await new Promise((r) => setTimeout(r, 3000));
-      const res = await fetch(`/api/generate-flythrough/status?id=${encodeURIComponent(id)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Statusopslag fejlede.");
-      if (data.state === "completed") return data.videoUrl;
-      if (data.state === "failed") throw new Error(data.failureReason || "Gennemgangen fejlede hos Luma.");
-    }
-  };
-
-  // Uploads (if needed) all photos and starts ONE Luma clip using only the
-  // first two (facade -> entry photo). The remaining photos never go to
-  // Luma at all - they're shown as a Ken-Burns montage client-side, so
-  // there's nothing there for the AI to get "confused" about.
-  const runFlythrough = async (reuseUploadedUrls) => {
-    setFlythroughStatus(reuseUploadedUrls ? "generating" : "uploading");
+  // Estimates a depth map for every uploaded photo (in order) entirely in the browser, then
+  // starts the show. Runs sequentially so the progress readout stays accurate and the model
+  // (loaded once, cached in getDepthEstimator) isn't asked to do several images at once.
+  const runFlythrough = async () => {
+    setFlythroughStatus("processing");
     setFlythroughError("");
-    setFlythroughVideoUrl(null);
     try {
-      let urls = reuseUploadedUrls;
-      if (!urls) {
-        const used = images.slice(0, MAX_FLYTHROUGH_IMAGES);
-        setFlythroughStills(used.map((img) => img.src));
-        urls = [];
-        for (let i = 0; i < used.length; i++) {
-          urls.push(await uploadImageForFlythrough(used[i].src, i));
-        }
-        setFlythroughImageUrls(urls);
-        setFlythroughStatus("generating");
+      const used = images.slice(0, MAX_FLYTHROUGH_IMAGES);
+      setFlythroughProgress({ current: 0, total: used.length });
+      const stills = [];
+      const depths = [];
+      for (let i = 0; i < used.length; i++) {
+        const resized = await resizeImageDataUrl(used[i].src, FLYTHROUGH_MAX_DIMENSION);
+        const depthCanvas = await estimateDepthCanvas(resized);
+        stills.push(resized);
+        depths.push(depthCanvas);
+        setFlythroughProgress({ current: i + 1, total: used.length });
       }
-      const res = await fetch("/api/generate-flythrough/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageUrls: urls.slice(0, FLYTHROUGH_ENTRY_KEYFRAME_COUNT), aspectRatio: "9:16" }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Kunne ikke starte gennemgangen.");
-      const videoUrl = await pollGeneration(data.id);
-      setFlythroughVideoUrl(videoUrl);
-      setFlythroughPhase("entry");
-      setFlythroughRoomIndex(0);
-      setFlythroughPrevRoomIndex(null);
+      setFlythroughStills(stills);
+      setFlythroughDepths(depths);
+      setFlythroughIndex(0);
+      setFlythroughPrevIndex(null);
       setFlythroughStatus("done");
     } catch (err) {
-      setFlythroughError(err.message);
+      setFlythroughError(err.message || "3D-gennemgangen fejlede.");
       setFlythroughStatus("error");
     }
   };
 
-  // Re-runs just the entry clip without re-uploading the same photos.
-  const regenerateFlythrough = () => {
-    if (flythroughImageUrls.length > 0) runFlythrough(flythroughImageUrls);
-  };
+  // Re-runs the whole thing (depth is cheap and local, so there's nothing to reuse).
+  const regenerateFlythrough = () => runFlythrough();
 
-  // Room photos (everything after the AI entry clip): a classic real-estate-listing
-  // still-photo presentation, but with clearly noticeable movement rather than a near-static
-  // hold - each photo gets one dominant move (zoom-in, zoom-out, or a pan) plus a real amount
-  // of the other axis mixed in, the way a real Ken Burns edit rarely holds perfectly still on
-  // one axis. Alternates dominant move room to room for variety, still an unhurried pace.
-  // Deterministic per index (seededRandom) so it doesn't reshuffle on every re-render.
-  const flythroughRoomStills = flythroughStills.slice(FLYTHROUGH_ENTRY_KEYFRAME_COUNT);
-  const flythroughRoomParams = useMemo(
-    () =>
-      flythroughRoomStills.map((_, i) => {
-        const r1 = seededRandom(i * 53.173 + 9.31);
-        const r2 = seededRandom(i * 19.61 + 4.7);
-        const r3 = seededRandom(i * 8.11 + 1.9);
-        const r4 = seededRandom(i * 31.47 + 6.2);
-        const moveType = i % 3; // cycle: zoom-in, pan, zoom-out (then repeats) for natural variety
-        const scaleAmt = 1.06 + r2 * 0.05; // 1.06 - 1.11: clearly visible zoom
-        const panAmt = 3.5 + r3 * 3.0; // 3.5% - 6.5% travel
-        const panHorizontal = r2 > 0.5;
-        const panSign = r1 > 0.5 ? 1 : -1;
-        const microPan = 1.2 + r4 * 1.2; // 1.2% - 2.4%: real secondary drift so zooms never sit dead-still
-        const microScale = 1.02 + r4 * 0.015; // a bit of zoom mixed into pure pans
-        const durationMs = 5000 + r2 * 1600; // ~5.0-6.6s - a touch brisker so the extra travel reads clearly
-        let kb;
-        if (moveType === 1) {
-          // Pan, with a real touch of zoom so it doesn't feel flat
-          kb = {
-            scaleFrom: 1.0,
-            scaleTo: microScale,
-            panX: panHorizontal ? panSign * panAmt : panSign * microPan,
-            panY: panHorizontal ? panSign * microPan : panSign * panAmt,
-          };
-        } else {
-          // Zoom in or out, with a clear drift on the other axis
-          const zoomIn = moveType === 0;
-          kb = {
-            scaleFrom: zoomIn ? 1.0 : scaleAmt,
-            scaleTo: zoomIn ? scaleAmt : 1.0,
-            panX: panHorizontal ? panSign * microPan : 0,
-            panY: panHorizontal ? 0 : panSign * microPan,
-          };
-        }
-        return { durationMs, kb };
-      }),
+  const flythroughParams = useMemo(
+    () => flythroughStills.map((_, i) => parallaxPathFor(i)),
     // eslint-disable-next-line
-    [flythroughRoomStills.length]
+    [flythroughStills.length]
   );
 
-  const getFlythroughRoomProgress = () => {
-    const dur = flythroughRoomParams[flythroughRoomIndex]?.durationMs || 3000;
-    return (performance.now() - flythroughRoomStartRef.current) / dur;
+  const getFlythroughProgress = () => {
+    const dur = flythroughParams[flythroughIndex]?.durationMs || 5500;
+    return (performance.now() - flythroughStartRef.current) / dur;
   };
 
-  const advanceFlythroughRoom = () => {
-    setFlythroughRoomIndex((i) => {
+  const advanceFlythrough = () => {
+    setFlythroughIndex((i) => {
       const next = i + 1;
-      setFlythroughPrevRoomIndex(i);
-      if (next >= flythroughRoomStills.length) {
-        // Montage finished - loop back to the start of the whole thing.
-        setFlythroughPhase("entry");
-        return 0;
-      }
-      return next;
+      setFlythroughPrevIndex(i);
+      return next >= flythroughStills.length ? 0 : next; // loop the whole show
     });
   };
 
-  // Drives the room montage: shows each room photo for its own duration,
-  // then advances (or loops back to the entry clip after the last one).
+  // Drives the show: holds each photo for its own duration, then advances (looping at the end).
   useEffect(() => {
-    if (flythroughStatus !== "done" || flythroughPhase !== "rooms") return;
-    if (flythroughRoomStills.length === 0) { setFlythroughPhase("entry"); return; }
-    flythroughRoomStartRef.current = performance.now();
-    const dur = flythroughRoomParams[flythroughRoomIndex]?.durationMs || 3000;
-    const t = setTimeout(advanceFlythroughRoom, dur);
+    if (flythroughStatus !== "done" || flythroughStills.length === 0) return;
+    flythroughStartRef.current = performance.now();
+    const dur = flythroughParams[flythroughIndex]?.durationMs || 5500;
+    const t = setTimeout(advanceFlythrough, dur);
     return () => clearTimeout(t);
     // eslint-disable-next-line
-  }, [flythroughStatus, flythroughPhase, flythroughRoomIndex, flythroughRoomStills.length]);
+  }, [flythroughStatus, flythroughIndex, flythroughStills.length]);
 
-  // Clears the outgoing room layer shortly after the incoming one has
-  // finished its crossfade-in (mirrors the scripted-scene player above).
+  // Clears the outgoing layer shortly after the incoming one has finished its crossfade-in.
   useEffect(() => {
-    if (flythroughPrevRoomIndex === null) return;
-    const t = setTimeout(() => setFlythroughPrevRoomIndex(null), 1100);
+    if (flythroughPrevIndex === null) return;
+    const t = setTimeout(() => setFlythroughPrevIndex(null), 1100);
     return () => clearTimeout(t);
-  }, [flythroughPrevRoomIndex]);
-
-  // Entry-clip playback: held under the literal uploaded facade photo for a
-  // beat before playback starts, so the opening frame is guaranteed to be
-  // exactly the uploaded photo regardless of any AI drift on frame 0 - per
-  // the "starten skal være ens hver gang" requirement.
-  useEffect(() => {
-    if (flythroughStatus !== "done" || flythroughPhase !== "entry" || !flythroughVideoUrl) return;
-    const el = flythroughVideoRef.current;
-    if (el) {
-      el.currentTime = 0;
-      el.play().catch(() => {});
-    }
-    setShowIntroFreeze(true);
-    if (introFreezeTimerRef.current) clearTimeout(introFreezeTimerRef.current);
-    introFreezeTimerRef.current = setTimeout(() => setShowIntroFreeze(false), 700);
-    // eslint-disable-next-line
-  }, [flythroughStatus, flythroughPhase, flythroughVideoUrl]);
-
-  const handleFlythroughEntryEnded = () => {
-    if (flythroughRoomStills.length > 0) {
-      setFlythroughRoomIndex(0);
-      setFlythroughPrevRoomIndex(null);
-      setFlythroughPhase("rooms");
-    } else {
-      // No room photos - just loop the entry clip on its own.
-      const el = flythroughVideoRef.current;
-      if (el) { el.currentTime = 0; el.play().catch(() => {}); }
-      setShowIntroFreeze(true);
-      if (introFreezeTimerRef.current) clearTimeout(introFreezeTimerRef.current);
-      introFreezeTimerRef.current = setTimeout(() => setShowIntroFreeze(false), 700);
-    }
-  };
+  }, [flythroughPrevIndex]);
 
   const togglePlay = () => {
     if (isPlaying) {
@@ -865,17 +920,14 @@ function Rundvis() {
               {scenes.length === 0 && <h1 className="font-display text-2xl mb-1">AI-gennemgang</h1>}
               {scenes.length > 0 && <h2 className="font-display text-lg mb-1">AI-gennemgang <span className="text-xs font-normal" style={{ color: MUTED }}>(eksperimentel)</span></h2>}
               <p className="text-xs mb-1" style={{ color: MUTED }}>
-                Laver en kort AI-video hvor kameraet bevæger sig ind ad hoveddøren og videre gennem de {Math.max(Math.min(Math.min(images.length, MAX_FLYTHROUGH_IMAGES), FLYTHROUGH_ENTRY_KEYFRAME_COUNT) - 1, 1)} første rum, efterfulgt af en filmisk gennemgang af de øvrige {Math.max(Math.min(images.length, MAX_FLYTHROUGH_IMAGES) - FLYTHROUGH_ENTRY_KEYFRAME_COUNT, 0)} rum med pan/zoom-effekter i varieret tempo — ligesom en rigtig redigeret rundvisningsvideo. Upload i den rækkefølge man skal bevæge sig: facade/udefra først, så indgang, så rum for rum.
+                Laver en filmisk gennemgang af op til {MAX_FLYTHROUGH_IMAGES} af dine billeder, hvor kameraet bevæger sig gennem hvert billede i ægte 3D — beregnet ud fra et dybdekort af billedet, ikke bare et fladt zoom/pan, men en rigtig parallakse-effekt hvor forgrund og baggrund bevæger sig forskelligt fra hinanden, ligesom et kamera der faktisk bevæger sig i rummet.
               </p>
               <p className="text-xs mb-1" style={{ color: MUTED }}>
-                Kun de første {Math.min(Math.min(images.length, MAX_FLYTHROUGH_IMAGES), FLYTHROUGH_ENTRY_KEYFRAME_COUNT)} billeder sendes til Luma (AI-video) — resten vises som ren pan/zoom af de rigtige fotos, uden AI, så der ikke er risiko for AI-fejl i selve rum-billederne. Tager typisk 1-2 minutter og koster reelt hos Luma. Brug med måde mens jeres Luma-saldo er lav.
+                Ingen AI-videogenerering er involveret — dybden beregnes lokalt i din browser med nøjagtig samme resultat hver gang, så der er ingen risiko for at kameraet "opfinder" en forkert bevægelse. Upload i den rækkefølge man skal bevæge sig igennem: facade/udefra først, så indgang, så rum for rum.
               </p>
-              <p className="text-xs mb-4" style={{ color: MUTED }}>
-                Tip til bedre resultat: tag billede 2 (det første indendørs) stående lige inden for døren med front ind i rummet — så ser overgangen fra billede 1 ud som ét naturligt skridt videre, ikke et spring.
-              </p>
-              {images.length >= 2 && flythroughStatus === "idle" && (
+              {images.length >= 1 && flythroughStatus === "idle" && (
                 <p className="text-xs mb-4" style={{ color: MUTED }}>
-                  Dette genererer <strong style={{ color: TEXT }}>ét AI-indgangsklip</strong> (facade + de {Math.max(Math.min(Math.min(images.length, MAX_FLYTHROUGH_IMAGES), FLYTHROUGH_ENTRY_KEYFRAME_COUNT) - 1, 1)} næste billeder) + en pan/zoom-gennemgang af de resterende {Math.max(Math.min(images.length, MAX_FLYTHROUGH_IMAGES) - FLYTHROUGH_ENTRY_KEYFRAME_COUNT, 0)} billeder.
+                  Beregner en 3D-kamerabevægelse for hvert af de {Math.min(images.length, MAX_FLYTHROUGH_IMAGES)} billeder du har uploadet indtil videre — tager typisk nogle få sekunder pr. billede, direkte i browseren.
                 </p>
               )}
 
@@ -885,73 +937,53 @@ function Rundvis() {
                 </button>
               )}
 
-              {flythroughStatus === "uploading" && (
-                <div className="flex items-center gap-2 text-sm" style={{ color: MUTED }}>
-                  <Icon name="loader" size={15} /> Uploader billeder…
-                </div>
-              )}
-
-              {flythroughStatus === "generating" && (
+              {flythroughStatus === "processing" && (
                 <div className="flex items-center gap-2 text-sm mb-4" style={{ color: MUTED }}>
-                  <Icon name="loader" size={15} /> Genererer indgangsklip hos Luma…
+                  <Icon name="loader" size={15} /> Beregner 3D-dybde for billede {flythroughProgress.current} af {flythroughProgress.total}…
                 </div>
               )}
 
               {flythroughStatus === "error" && <p className="text-xs" style={{ color: AMBER }}>{flythroughError}</p>}
 
-              {flythroughStatus === "done" && flythroughVideoUrl && (
+              {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="relative rounded-lg overflow-hidden mb-4" style={{ backgroundColor: "#000", aspectRatio: "9/16", maxWidth: 320 }}>
-                  <video ref={flythroughVideoRef} src={flythroughVideoUrl} className="absolute inset-0 w-full h-full object-cover transition-opacity duration-500"
-                    style={{ opacity: flythroughPhase === "entry" ? 1 : 0, zIndex: flythroughPhase === "entry" ? 2 : 1 }}
-                    playsInline autoPlay onEnded={handleFlythroughEntryEnded} />
-                  {flythroughPhase === "entry" && flythroughStills[0] && (
-                    <img src={flythroughStills[0]} alt="" className="absolute inset-0 w-full h-full object-cover transition-opacity duration-500"
-                      style={{ opacity: showIntroFreeze ? 1 : 0, zIndex: 3, pointerEvents: "none" }} />
+                  {flythroughPrevIndex !== null && (
+                    <ParallaxLayer
+                      src={flythroughStills[flythroughPrevIndex]}
+                      depthCanvas={flythroughDepths[flythroughPrevIndex]}
+                      active={false}
+                      getProgress={() => 1}
+                      path={flythroughParams[flythroughPrevIndex]}
+                      fadeMs={1000}
+                    />
                   )}
-                  {flythroughPhase === "rooms" && flythroughRoomStills.length > 0 && (
-                    <>
-                      {flythroughPrevRoomIndex !== null && (
-                        <SceneLayer
-                          src={flythroughRoomStills[flythroughPrevRoomIndex]}
-                          active={false}
-                          isPlaying={true}
-                          getProgress={() => 1}
-                          kbParams={flythroughRoomParams[flythroughPrevRoomIndex]?.kb || { scaleFrom: 1, scaleTo: 1, panX: 0, panY: 0 }}
-                          fadeMs={1000}
-                        />
-                      )}
-                      <SceneLayer
-                        key={`room-${flythroughRoomIndex}`}
-                        src={flythroughRoomStills[flythroughRoomIndex]}
-                        active={true}
-                        isPlaying={true}
-                        getProgress={getFlythroughRoomProgress}
-                        kbParams={flythroughRoomParams[flythroughRoomIndex]?.kb || { scaleFrom: 1, scaleTo: 1, panX: 0, panY: 0 }}
-                        fadeMs={1000}
-                      />
-                    </>
-                  )}
+                  <ParallaxLayer
+                    key={`shot-${flythroughIndex}`}
+                    src={flythroughStills[flythroughIndex]}
+                    depthCanvas={flythroughDepths[flythroughIndex]}
+                    active={true}
+                    getProgress={getFlythroughProgress}
+                    path={flythroughParams[flythroughIndex]}
+                    fadeMs={1000}
+                  />
                 </div>
               )}
 
-              {flythroughStatus === "done" && flythroughVideoUrl && (
+              {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="flex items-center gap-4 mb-2">
                   <button onClick={regenerateFlythrough} className="flex items-center gap-1.5 text-xs" style={{ color: MUTED }}>
-                    <Icon name="rotate" size={12} /> Generér indgangsklip forfra
+                    <Icon name="rotate" size={12} /> Generér forfra
                   </button>
-                  <a href={flythroughVideoUrl} download="rundvis-indgang.mp4" target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-xs" style={{ color: MUTED }}>
-                    <Icon name="upload" size={12} className="rotate-180" /> Gem indgangsklip
-                  </a>
                 </div>
               )}
 
-              {flythroughStatus === "done" && flythroughVideoUrl && (
+              {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <p className="text-[10px] mb-4" style={{ color: MUTED }}>
-                  Kun AI-indgangsklippet kan gemmes som video (link fra Luma udløber efter ca. 1 time) — resten af gennemgangen er en live pan/zoom-visning her på siden, ikke en samlet videofil endnu.
+                  Ægte 3D-kamerabevægelse beregnet direkte i din browser ud fra dine billeder — ingen AI-videogenerering, så resultatet er identisk hver gang. Det er endnu ikke en downloadbar videofil, kun en live visning her på siden.
                 </p>
               )}
 
-              {flythroughStatus === "error" && flythroughImageUrls.length > 0 && (
+              {flythroughStatus === "error" && flythroughStills.length === 0 && (
                 <button onClick={regenerateFlythrough} className="flex items-center gap-1.5 text-xs mt-1" style={{ color: MUTED }}>
                   <Icon name="rotate" size={12} /> Prøv igen
                 </button>
