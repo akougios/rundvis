@@ -492,18 +492,29 @@ function Rundvis() {
     if (flythroughImageUrls.length > 0) runFlythrough(flythroughImageUrls);
   };
 
-  // Room photos (everything after the 2 used for the Luma entry clip),
-  // each given a varied "pace" - some quicker, punchier zooms, some slow,
-  // lingering glides - so the montage doesn't feel mechanical. Deterministic
-  // per index (seededRandom) so it doesn't reshuffle on every re-render.
+  // Room photos (everything after the AI entry clip): still photos with
+  // only a subtle, slow drift - NOT the same amount of zoom/pan as the
+  // scripted-scene Ken Burns effect, which felt too much like "flying
+  // through" the rooms. Small scale/pan amplitude + longer, fairly uniform
+  // durations, so it reads as a calm still-photo montage rather than
+  // camera movement. Deterministic per index (seededRandom) so it doesn't
+  // reshuffle on every re-render.
   const flythroughRoomStills = flythroughStills.slice(FLYTHROUGH_ENTRY_KEYFRAME_COUNT);
   const flythroughRoomParams = useMemo(
     () =>
       flythroughRoomStills.map((_, i) => {
-        const r = seededRandom(i * 53.173 + 9.31);
-        const fast = r > 0.55;
-        const durationMs = fast ? 2100 + r * 800 : 3400 + r * 1600; // fast glides ~2.1-2.9s, slow glides ~3.4-5.0s
-        return { durationMs, kb: kenBurnsParamsFor(i + 500) }; // seed offset so it doesn't mirror the scripted-scene pan/zoom pattern
+        const r1 = seededRandom(i * 53.173 + 9.31);
+        const r2 = seededRandom(i * 19.61 + 4.7);
+        const r3 = seededRandom(i * 8.11 + 1.9);
+        const zoomIn = r1 > 0.5;
+        const scaleAmt = 1.03 + r2 * 0.03; // 1.03 - 1.06: barely-there zoom, not a swoop
+        const panX = (r3 - 0.5) * 2.5; // -1.25% .. 1.25%
+        const panY = (r1 - 0.5) * 1.8; // -0.9% .. 0.9%
+        const durationMs = 3800 + r2 * 1400; // ~3.8-5.2s, all slow - no punchy fast variant
+        return {
+          durationMs,
+          kb: { scaleFrom: zoomIn ? 1.0 : scaleAmt, scaleTo: zoomIn ? scaleAmt : 1.0, panX, panY },
+        };
       }),
     // eslint-disable-next-line
     [flythroughRoomStills.length]
