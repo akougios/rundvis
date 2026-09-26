@@ -341,7 +341,11 @@ function ParallaxLayer({ src, depthCanvas, active, getProgress, spec, fadeMs }) 
         from.y + (to.y - from.y) * e,
         from.z + (to.z - from.z) * e
       );
-      s.camera.lookAt(0, 0, 0);
+      // No lookAt/rotation here on purpose: the plane is sized (object-cover, in the mesh-build
+      // effect above) so that a camera translating along X/Y/Z while facing straight down -Z
+      // never sees past the photo's edge. Rotating the camera to keep looking at the plane
+      // center (as an earlier version did) breaks that guarantee - the visible window skews
+      // off axis and shows black past the mesh on two corners.
       s.renderer.render(s.scene, s.camera);
     };
     if (active) {
