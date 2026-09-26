@@ -27,16 +27,24 @@
 
 const LUMA_BASE = "https://agents.lumalabs.ai/v1/generations";
 
+// "camera push in" is one of Luma's own documented trigger phrases for
+// forward camera motion (Dream Machine's camera control is entirely
+// language-based, and specific phrases like this are followed far more
+// reliably than descriptive prose). It's placed first and repeated because
+// prompt weight favors the opening words. This replaces an earlier,
+// longer, more descriptive prompt that still sometimes produced backward/
+// pull-back motion (the camera revealing the house from further away
+// instead of advancing toward it) - free-form description alone was not
+// reliable enough.
 const ENTRY_PROMPT =
-  "Cinematic real estate listing intro shot: a single smooth, slow, " +
-  "deliberate camera movement starting outside showing the building's " +
-  "facade, then gliding forward at an unhurried, elegant pace toward the " +
-  "front door, moving through the doorway and arriving just inside the " +
-  "entryway. The camera only ever moves forward, in a straight, " +
-  "believable path - it never moves backward, never retreats away from " +
-  "the building, and never reverses direction. Gentle, steady, level " +
-  "horizon, photorealistic architecture and lighting, no warped walls or " +
-  "floating objects, professional real estate videography quality.";
+  "Camera push in, dolly forward, slow and steady. " +
+  "The camera moves straight forward, advancing from outside the " +
+  "building toward the front door and continuing forward through the " +
+  "doorway into the entryway. Push in the entire time - the camera never " +
+  "pulls back, never dollies out, never zooms out, never reveals the " +
+  "building from further away, and never retreats. Forward motion only, " +
+  "from start to finish. Smooth, slow, deliberate, professional real " +
+  "estate videography, photorealistic, level horizon, no distortion.";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
