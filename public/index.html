@@ -404,7 +404,7 @@ function Rundvis() {
   // but a real "coming through the door" moment plus a nicely edited slideshow of the individual
   // rooms. It's also far cheaper: only 2 photos ever go to Luma, no matter how many rooms there are.
   const MAX_FLYTHROUGH_IMAGES = 8;
-  const FLYTHROUGH_ENTRY_KEYFRAME_COUNT = 4; // must match ENTRY_KEYFRAME_COUNT in api/generate-flythrough/create.js - how many of the uploaded photos (facade, entry, + a couple rooms) go into the one AI clip; the rest are shown as a Ken-Burns montage
+  const FLYTHROUGH_ENTRY_KEYFRAME_COUNT = 2; // must match ENTRY_KEYFRAME_COUNT in api/generate-flythrough/create.js - only facade + first room go into the one AI clip; the rest are shown as a Ken-Burns montage, no AI
   const FLYTHROUGH_MAX_DIMENSION = 1600; // client-side resize cap before upload - Luma renders at 720p anyway, so a full-res phone photo (often 5-15MB) only slows the upload and inflates storage for no visual gain
 
   // Downscale a data-URL image in the browser (canvas) before it's uploaded.

@@ -68,9 +68,9 @@ Sæt `ANTHROPIC_API_KEY` i en `.env` fil eller via `vercel env pull` først.
 ## AI-gennemgang (eksperimentel)
 
 Genererer ét ægte AI-videoklip (Luma, `api/generate-flythrough/*`) for
-selve indgangen — kameraet bevæger sig ind ad hoveddøren og videre gennem
-de første rum, ud fra de første `FLYTHROUGH_ENTRY_KEYFRAME_COUNT` (4)
-uploadede billeder (facade + indgang + op til 2 rum). Herefter fortsætter
+selve indgangen — kameraet bevæger sig fra facaden, ind ad hoveddøren og
+ind i det første rum, ud fra kun de første `FLYTHROUGH_ENTRY_KEYFRAME_COUNT`
+(2) uploadede billeder (facade + første rum). Herefter fortsætter
 visningen automatisk som en filmisk pan/zoom-gennemgang af de resterende
 billeder, med `SceneLayer`/`kenBurnsParamsFor`-teknikken fra den scriptede
 voiceover-visning: hvert rum får enten et zoom-ind, et zoom-ud eller en
@@ -90,7 +90,7 @@ opsætning fundet indtil videre, men en enkelt generering kan i sjældne
 tilfælde stadig afvige. Der er en "Prøv igen"-knap i UI'et til at
 genskabe klippet uden at skulle uploade billederne igen.
 
-Kun de første 4 billeder sendes til Luma (koster reelt) - resten vises som
+Kun de første 2 billeder sendes til Luma (koster reelt) - resten vises som
 ren pan/zoom af de rigtige fotos, uden AI. Tager typisk 1-2 minutter at
 generere. Der er ingen eksport til mp4/delbar fil for denne visning - kun
 live-afspilning i browseren, ligesom den scriptede voiceover-visning
@@ -103,19 +103,22 @@ Der er afprøvet seks forskellige AI-genererede varianter for netop
 multi-keyframe-kald med hele billedserien, multi-keyframe med kun 2
 billeder, 2-punkts `start_frame`/`end_frame`, forskellige prompt-ordlyde
 (inkl. Luma's dokumenterede "camera push in"-frase), og til sidst
-multi-keyframe med 4 billeder (facade + indgang + 2 rum) - som er den
-nuværende opsætning, og som konsekvent gav et korrekt resultat i test.
-Flere af de tidligere varianter viste samme fejl undervejs: kameraet
-bevægede sig nogle gange baglæns/væk fra huset i stedet for fremad gennem
-døren, formentlig fordi for få/for ens billeder gav modellen for lidt
-retningssignal at holde sig til. Selv 4-billeders opsætningen kan dog
-stadig i sjældne tilfælde give samme resultat (Luma har ingen
-seed-parameter), så prompten er siden gjort langt mere eksplicit om
-præcis hvad billede 1 viser (facade, stillestående kamera) og hvad
-kameraet skal gøre derfra (kun fremad, aldrig væk fra huset), og
-kaldet sender nu også Luma's strukturerede "camera concept"
-`push_in` (docs.lumalabs.ai/changelog/concepts) som et ekstra,
-maskinlæsbart retningshint ud over selve prompt-teksten - med
-automatisk retry uden det felt, hvis Luma skulle afvise kaldet fordi
-det ikke understøttes sammen med multi-keyframe.
+multi-keyframe med 4 billeder (facade + indgang + 2 rum), som gav et
+korrekt resultat i test dengang, men senere alligevel viste samme fejl på
+en frisk generering. Flere af de tidligere varianter viste samme fejl
+undervejs: kameraet bevægede sig nogle gange baglæns/væk fra huset i
+stedet for fremad gennem døren. Da flere billeder alene ikke løste det
+holdbart (Luma har ingen seed-parameter, så selv en opsætning der virkede
+én gang kan give et andet resultat næste gang), er opsætningen nu
+skåret ned til kun 2 billeder (facade + første rum, `ENTRY_KEYFRAME_COUNT
+= 2`) med en prompt der er langt mere eksplicit om præcis hvad billede 1
+viser (facade, stillestående kamera) og hvad kameraet skal gøre derfra
+(kun fremad ind i det første rum, aldrig væk fra huset). Kaldet sender nu
+også Luma's strukturerede "camera concept" `push_in`
+(docs.lumalabs.ai/changelog/concepts) som et ekstra, maskinlæsbart
+retningshint ud over selve prompt-teksten - med automatisk retry uden det
+felt, hvis Luma skulle afvise kaldet fordi det ikke understøttes sammen
+med multi-keyframe. Der er stadig ingen garanti for 100 % konsistent
+resultat, kun den mest direkte og eksplicitte retningsstyring afprøvet
+indtil videre.
 retningssignal at holde sig til.

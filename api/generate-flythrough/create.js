@@ -41,7 +41,7 @@
 
 const LUMA_BASE = "https://agents.lumalabs.ai/v1/generations";
 const FPS = 24;
-const ENTRY_KEYFRAME_COUNT = 4; // facade + entry + up to 2 more rooms, at most
+const ENTRY_KEYFRAME_COUNT = 2; // facade + first room only - everything else is plain pan/zoom, no AI
 
 // Deliberately over-explicit and repetitive: spells out exactly what the
 // FIRST frame shows and what the camera must do from that exact position,
@@ -54,13 +54,12 @@ const ENTRY_PROMPT =
   "house from the outside, facade fully visible, camera stationary, " +
   "nothing else - this is the fixed starting position, do not move away " +
   "from it or reveal more of the exterior than is already visible in " +
-  "frame one. " +
+  "frame one. The very last frame of this video shows the first room " +
+  "just inside the front door. " +
   "From that exact starting position, the camera moves forward: a slow, " +
   "smooth, steady walk-in toward the building, straight ahead, getting " +
   "closer to the front door with every frame, then passing through the " +
-  "doorway into the entrance hall, then continuing forward from room to " +
-  "room in the exact order the reference images are given, at an " +
-  "unhurried, gentle pace, lingering briefly in each space. " +
+  "doorway and coming to rest inside that first room. " +
   "Camera push in, dolly forward, walk forward, approach, advance, enter. " +
   "The camera NEVER does any of the following: it never moves backward, " +
   "it never dollies out or zooms out, it never pulls away from the " +
