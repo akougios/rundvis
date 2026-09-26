@@ -67,41 +67,45 @@ Sæt `ANTHROPIC_API_KEY` i en `.env` fil eller via `vercel env pull` først.
 
 ## AI-gennemgang (eksperimentel)
 
-**Status: 100% deterministisk, ingen AI-videogenerering.** Der er ikke
-længere noget Luma-kald i dette flow (`api/generate-flythrough/*` ligger
-stadig i repoet, men bruges ikke af frontend'en for øjeblikket) - se
-"Historik" nedenfor for hvorfor.
+Genererer ét ægte AI-videoklip (Luma, `api/generate-flythrough/*`) for
+selve indgangen — kameraet bevæger sig ind ad hoveddøren og videre gennem
+de første rum, ud fra de første `FLYTHROUGH_ENTRY_KEYFRAME_COUNT` (4)
+uploadede billeder (facade + indgang + op til 2 rum). Herefter fortsætter
+visningen automatisk som en filmisk pan/zoom-gennemgang af de resterende
+billeder, med `SceneLayer`/`kenBurnsParamsFor`-teknikken fra den scriptede
+voiceover-visning: hvert rum får enten et zoom-ind, et zoom-ud eller en
+panorering som hovedbevægelse, plus en anelse bevægelse på den anden akse
+så det aldrig føles helt fladt/stillestående — dette varierer rum for rum
+(deterministisk pr. billede-indeks, så rækkefølgen af effekter er stabil på
+tværs af genindlæsninger). Hvert rum holdes 5,6-7,6 sekunder.
 
-Viser de første 8 uploadede billeder som en rolig fotomontage, i rækkefølge
-(facade → indgang → rum for rum), genbruger samme `SceneLayer`/
-`kenBurnsParamsFor`-teknik som den scriptede voiceover-visning ovenfor.
-Facade-billedet (det første) får en langsommere, mere markant "push in"-
-zoom for at sælge fornemmelsen af at nærme sig huset; resten af billederne
-skifter mellem en næsten umærkelig zoom eller panorering (aldrig begge på
-samme tid), hver holdt i 5,8-7,6 sekunder - et klassisk, roligt
-boligfremvisnings-udtryk. Ingen upload, intet netværkskald, ingen
-Luma-omkostning, og afspilningen starter øjeblikkeligt.
+**Vigtigt: AI-klippets retning kan ikke garanteres 100 % ens hver gang.**
+Luma's egen FAQ bekræfter at der ikke findes en `seed`-parameter og ingen
+måde at få reproducerbart output på: "Each generation uses a different
+random seed and there is no public seed parameter." Der er testet en lang
+række opsætninger for at gøre resultatet så konsistent som muligt (se
+"Historik" nedenfor) - 4-billeders multi-keyframe med en prompt der
+eksplicit beder om ren fremadgående bevægelse er den mest pålidelige
+opsætning fundet indtil videre, men en enkelt generering kan i sjældne
+tilfælde stadig afvige. Der er en "Prøv igen"-knap i UI'et til at
+genskabe klippet uden at skulle uploade billederne igen.
 
-### Historik: hvorfor ikke AI-video?
+Kun de første 4 billeder sendes til Luma (koster reelt) - resten vises som
+ren pan/zoom af de rigtige fotos, uden AI. Tager typisk 1-2 minutter at
+generere. Der er ingen eksport til mp4/delbar fil for denne visning - kun
+live-afspilning i browseren, ligesom den scriptede voiceover-visning
+ovenfor.
 
-Der blev afprøvet seks forskellige AI-genererede varianter for netop
+### Historik: forsøg på at gøre AI-indgangen pålidelig
+
+Der er afprøvet seks forskellige AI-genererede varianter for netop
 "facade → ind ad hoveddøren"-overgangen: kædede per-segment-klip, ét
 multi-keyframe-kald med hele billedserien, multi-keyframe med kun 2
 billeder, 2-punkts `start_frame`/`end_frame`, forskellige prompt-ordlyde
 (inkl. Luma's dokumenterede "camera push in"-frase), og til sidst
-multi-keyframe med 4 billeder (facade + indgang + 2 rum), som gav et godt
-resultat én gang. Alle varianter viste før eller siden samme fejl: kameraet
+multi-keyframe med 4 billeder (facade + indgang + 2 rum) - som er den
+nuværende opsætning, og som konsekvent gav et korrekt resultat i test.
+Flere af de tidligere varianter viste samme fejl undervejs: kameraet
 bevægede sig nogle gange baglæns/væk fra huset i stedet for fremad gennem
-døren.
-
-Luma's egen FAQ bekræfter at der ikke findes en `seed`-parameter og ingen
-måde at få reproducerbart output på: "Each generation uses a different
-random seed and there is no public seed parameter." Det betyder en
-opsætning der virkede fint én gang sagtens kan give et dårligere resultat
-næste gang, af ren tilfældighed - hvilket gør AI-video uegnet, når kravet
-er et *konsistent* resultat hver gang. Derfor er hele funktionen nu
-deterministisk pan/zoom på de rigtige billeder i stedet.
-
-Der er ingen eksport til mp4/delbar fil for denne visning heller - kun
-live-afspilning i browseren, ligesom den scriptede voiceover-visning
-ovenfor.
+døren, formentlig fordi for få/for ens billeder gav modellen for lidt
+retningssignal at holde sig til.
