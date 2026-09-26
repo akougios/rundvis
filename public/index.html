@@ -179,12 +179,16 @@ function Rundvis() {
 
   const [flythroughStatus, setFlythroughStatus] = useState("idle"); // idle|uploading|generating|done|error
   const [flythroughError, setFlythroughError] = useState("");
-  const [flythroughVideoUrl, setFlythroughVideoUrl] = useState(null); // one video for the whole walkthrough (single multi-keyframe Luma call)
-  const [flythroughImageUrls, setFlythroughImageUrls] = useState([]); // uploaded blob URLs, kept around so the whole thing can be regenerated without re-uploading
+  const [flythroughVideoUrl, setFlythroughVideoUrl] = useState(null); // the one Luma AI clip: exterior -> through the front door
+  const [flythroughImageUrls, setFlythroughImageUrls] = useState([]); // uploaded blob URLs, kept around so the entry clip can be regenerated without re-uploading
   const flythroughVideoRef = useRef(null);
-  const [flythroughStills, setFlythroughStills] = useState([]); // local data-URLs of the images actually used, for the guaranteed-identical opening freeze frame
+  const [flythroughStills, setFlythroughStills] = useState([]); // local data-URLs of the images actually used: [0]=facade, [1]=entry photo (both feed the Luma clip), [2..]=room photos shown as a Ken-Burns montage after it
   const [showIntroFreeze, setShowIntroFreeze] = useState(false);
   const introFreezeTimerRef = useRef(null);
+  const [flythroughPhase, setFlythroughPhase] = useState("entry"); // "entry" (playing the Luma clip) | "rooms" (Ken-Burns montage of the remaining photos)
+  const [flythroughRoomIndex, setFlythroughRoomIndex] = useState(0);
+  const [flythroughPrevRoomIndex, setFlythroughPrevRoomIndex] = useState(null);
+  const flythroughRoomStartRef = useRef(0);
 
   const fileInputRef = useRef(null);
   const audioRef = useRef(null);
@@ -392,7 +396,13 @@ function Rundvis() {
 
   const allVoicesReady = voices.length === scenes.length && voices.every((v) => v && v.status === "ready");
 
-  // ---- AI-gennemgang (experimental): ONE multi-keyframe Luma clip covering the whole walkthrough, no voiceover ----
+  // ---- AI-gennemgang (experimental): ONE short Luma AI clip for the exterior->through-the-door
+  // arrival, followed by a Ken-Burns pan/zoom montage of the remaining room photos (reusing the
+  // same SceneLayer/kenBurnsParamsFor technique as the scripted voiceover flow above). This
+  // matches how real estate walkthrough videos are actually cut in practice - not one continuous
+  // AI-generated flight through every room (which Luma can't reliably plan structure/order for),
+  // but a real "coming through the door" moment plus a nicely edited slideshow of the individual
+  // rooms. It's also far cheaper: only 2 photos ever go to Luma, no matter how many rooms there are.
   const MAX_FLYTHROUGH_IMAGES = 8;
   const FLYTHROUGH_MAX_DIMENSION = 1600; // client-side resize cap before upload - Luma renders at 720p anyway, so a full-res phone photo (often 5-15MB) only slows the upload and inflates storage for no visual gain
 
@@ -437,10 +447,10 @@ function Rundvis() {
     }
   };
 
-  // Uploads (if needed) and starts ONE Luma multi-keyframe generation that
-  // sees every photo, in order, in a single call - this is what lets Luma
-  // plan one continuous forward camera path (exterior -> door -> room ->
-  // room) instead of gluing together clips it generated in isolation.
+  // Uploads (if needed) all photos and starts ONE Luma clip using only the
+  // first two (facade -> entry photo). The remaining photos never go to
+  // Luma at all - they're shown as a Ken-Burns montage client-side, so
+  // there's nothing there for the AI to get "confused" about.
   const runFlythrough = async (reuseUploadedUrls) => {
     setFlythroughStatus(reuseUploadedUrls ? "generating" : "uploading");
     setFlythroughError("");
@@ -460,12 +470,15 @@ function Rundvis() {
       const res = await fetch("/api/generate-flythrough/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageUrls: urls, aspectRatio: "9:16" }),
+        body: JSON.stringify({ imageUrls: urls.slice(0, 2), aspectRatio: "9:16" }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Kunne ikke starte gennemgangen.");
       const videoUrl = await pollGeneration(data.id);
       setFlythroughVideoUrl(videoUrl);
+      setFlythroughPhase("entry");
+      setFlythroughRoomIndex(0);
+      setFlythroughPrevRoomIndex(null);
       setFlythroughStatus("done");
     } catch (err) {
       setFlythroughError(err.message);
@@ -473,18 +486,72 @@ function Rundvis() {
     }
   };
 
-  // Re-runs the single Luma call without re-uploading the same photos.
+  // Re-runs just the entry clip without re-uploading the same photos.
   const regenerateFlythrough = () => {
     if (flythroughImageUrls.length > 0) runFlythrough(flythroughImageUrls);
   };
 
-  // Playback: a single <video>, with the literal uploaded exterior photo
-  // held over it for a beat before playback starts. AI video models can
-  // drift slightly from the conditioning image even on frame 0 - this
-  // guarantees the viewer always sees exactly the same, correct starting
-  // photo, every time, per the "starten skal være ens hver gang" requirement.
+  // Room photos (everything after the 2 used for the Luma entry clip),
+  // each given a varied "pace" - some quicker, punchier zooms, some slow,
+  // lingering glides - so the montage doesn't feel mechanical. Deterministic
+  // per index (seededRandom) so it doesn't reshuffle on every re-render.
+  const flythroughRoomStills = flythroughStills.slice(2);
+  const flythroughRoomParams = useMemo(
+    () =>
+      flythroughRoomStills.map((_, i) => {
+        const r = seededRandom(i * 53.173 + 9.31);
+        const fast = r > 0.55;
+        const durationMs = fast ? 2100 + r * 800 : 3400 + r * 1600; // fast glides ~2.1-2.9s, slow glides ~3.4-5.0s
+        return { durationMs, kb: kenBurnsParamsFor(i + 500) }; // seed offset so it doesn't mirror the scripted-scene pan/zoom pattern
+      }),
+    // eslint-disable-next-line
+    [flythroughRoomStills.length]
+  );
+
+  const getFlythroughRoomProgress = () => {
+    const dur = flythroughRoomParams[flythroughRoomIndex]?.durationMs || 3000;
+    return (performance.now() - flythroughRoomStartRef.current) / dur;
+  };
+
+  const advanceFlythroughRoom = () => {
+    setFlythroughRoomIndex((i) => {
+      const next = i + 1;
+      setFlythroughPrevRoomIndex(i);
+      if (next >= flythroughRoomStills.length) {
+        // Montage finished - loop back to the start of the whole thing.
+        setFlythroughPhase("entry");
+        return 0;
+      }
+      return next;
+    });
+  };
+
+  // Drives the room montage: shows each room photo for its own duration,
+  // then advances (or loops back to the entry clip after the last one).
   useEffect(() => {
-    if (flythroughStatus !== "done" || !flythroughVideoUrl) return;
+    if (flythroughStatus !== "done" || flythroughPhase !== "rooms") return;
+    if (flythroughRoomStills.length === 0) { setFlythroughPhase("entry"); return; }
+    flythroughRoomStartRef.current = performance.now();
+    const dur = flythroughRoomParams[flythroughRoomIndex]?.durationMs || 3000;
+    const t = setTimeout(advanceFlythroughRoom, dur);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line
+  }, [flythroughStatus, flythroughPhase, flythroughRoomIndex, flythroughRoomStills.length]);
+
+  // Clears the outgoing room layer shortly after the incoming one has
+  // finished its crossfade-in (mirrors the scripted-scene player above).
+  useEffect(() => {
+    if (flythroughPrevRoomIndex === null) return;
+    const t = setTimeout(() => setFlythroughPrevRoomIndex(null), 600);
+    return () => clearTimeout(t);
+  }, [flythroughPrevRoomIndex]);
+
+  // Entry-clip playback: held under the literal uploaded facade photo for a
+  // beat before playback starts, so the opening frame is guaranteed to be
+  // exactly the uploaded photo regardless of any AI drift on frame 0 - per
+  // the "starten skal være ens hver gang" requirement.
+  useEffect(() => {
+    if (flythroughStatus !== "done" || flythroughPhase !== "entry" || !flythroughVideoUrl) return;
     const el = flythroughVideoRef.current;
     if (el) {
       el.currentTime = 0;
@@ -494,17 +561,21 @@ function Rundvis() {
     if (introFreezeTimerRef.current) clearTimeout(introFreezeTimerRef.current);
     introFreezeTimerRef.current = setTimeout(() => setShowIntroFreeze(false), 700);
     // eslint-disable-next-line
-  }, [flythroughStatus, flythroughVideoUrl]);
+  }, [flythroughStatus, flythroughPhase, flythroughVideoUrl]);
 
-  const handleFlythroughEnded = () => {
-    const el = flythroughVideoRef.current;
-    if (el) {
-      el.currentTime = 0;
-      el.play().catch(() => {});
+  const handleFlythroughEntryEnded = () => {
+    if (flythroughRoomStills.length > 0) {
+      setFlythroughRoomIndex(0);
+      setFlythroughPrevRoomIndex(null);
+      setFlythroughPhase("rooms");
+    } else {
+      // No room photos - just loop the entry clip on its own.
+      const el = flythroughVideoRef.current;
+      if (el) { el.currentTime = 0; el.play().catch(() => {}); }
+      setShowIntroFreeze(true);
+      if (introFreezeTimerRef.current) clearTimeout(introFreezeTimerRef.current);
+      introFreezeTimerRef.current = setTimeout(() => setShowIntroFreeze(false), 700);
     }
-    setShowIntroFreeze(true);
-    if (introFreezeTimerRef.current) clearTimeout(introFreezeTimerRef.current);
-    introFreezeTimerRef.current = setTimeout(() => setShowIntroFreeze(false), 700);
   };
 
   const togglePlay = () => {
@@ -763,17 +834,17 @@ function Rundvis() {
               {scenes.length === 0 && <h1 className="font-display text-2xl mb-1">AI-gennemgang</h1>}
               {scenes.length > 0 && <h2 className="font-display text-lg mb-1">AI-gennemgang <span className="text-xs font-normal" style={{ color: MUTED }}>(eksperimentel)</span></h2>}
               <p className="text-xs mb-1" style={{ color: MUTED }}>
-                Genererer ÉN sammenhængende kamera-gennemgang ud fra de første {Math.min(images.length, MAX_FLYTHROUGH_IMAGES)} billeder, uden voiceover. Upload i den rækkefølge man skal bevæge sig: facade/udefra først, så indgang, så rum for rum — Luma ser hele rækkefølgen på én gang og flyver fremad gennem den, i stedet for adskilte klip limet sammen.
+                Laver en kort AI-video hvor kameraet bevæger sig ind ad hoveddøren (ud fra de første 2 billeder), efterfulgt af en filmisk gennemgang af de øvrige {Math.max(Math.min(images.length, MAX_FLYTHROUGH_IMAGES) - 2, 0)} rum med pan/zoom-effekter i varieret tempo — ligesom en rigtig redigeret rundvisningsvideo. Upload i den rækkefølge man skal bevæge sig: facade/udefra først, så indgang, så rum for rum.
               </p>
               <p className="text-xs mb-1" style={{ color: MUTED }}>
-                Tager typisk 1-3 minutter og koster reelt hos Luma. Brug med måde mens jeres Luma-saldo er lav.
+                Kun de første 2 billeder sendes til Luma (~5 sek. AI-video) — resten vises som ren pan/zoom af de rigtige fotos, uden AI, så der ikke er risiko for AI-fejl i selve rum-billederne. Tager typisk 1-2 minutter og koster reelt hos Luma. Brug med måde mens jeres Luma-saldo er lav.
               </p>
               <p className="text-xs mb-4" style={{ color: MUTED }}>
-                Tip til bedre resultat: skarpe, veloplyste billeder uden fisheye-forvrængning og med ryddede rum giver markant færre AI-fejl (bøjede vægge, mærkelige detaljer) end mørke eller rodede billeder.
+                Tip til bedre resultat: tag billede 2 (det første indendørs) stående lige inden for døren med front ind i rummet — så ser overgangen fra billede 1 ud som ét naturligt skridt videre, ikke et spring.
               </p>
               {images.length >= 2 && flythroughStatus === "idle" && (
                 <p className="text-xs mb-4" style={{ color: MUTED }}>
-                  Dette genererer <strong style={{ color: TEXT }}>én video</strong> (~{Math.min(images.length, MAX_FLYTHROUGH_IMAGES) > 2 ? 10 : 5} sek.).
+                  Dette genererer <strong style={{ color: TEXT }}>ét AI-indgangsklip</strong> (~5 sek.) + en pan/zoom-gennemgang af de resterende {Math.max(Math.min(images.length, MAX_FLYTHROUGH_IMAGES) - 2, 0)} billeder.
                 </p>
               )}
 
@@ -791,7 +862,7 @@ function Rundvis() {
 
               {flythroughStatus === "generating" && (
                 <div className="flex items-center gap-2 text-sm mb-4" style={{ color: MUTED }}>
-                  <Icon name="loader" size={15} /> Genererer gennemgangen hos Luma…
+                  <Icon name="loader" size={15} /> Genererer indgangsklip hos Luma…
                 </div>
               )}
 
@@ -799,11 +870,33 @@ function Rundvis() {
 
               {flythroughStatus === "done" && flythroughVideoUrl && (
                 <div className="relative rounded-lg overflow-hidden mb-4" style={{ backgroundColor: "#000", aspectRatio: "9/16", maxWidth: 320 }}>
-                  <video ref={flythroughVideoRef} src={flythroughVideoUrl} className="absolute inset-0 w-full h-full object-cover"
-                    playsInline autoPlay onEnded={handleFlythroughEnded} />
-                  {flythroughStills[0] && (
+                  <video ref={flythroughVideoRef} src={flythroughVideoUrl} className="absolute inset-0 w-full h-full object-cover transition-opacity duration-500"
+                    style={{ opacity: flythroughPhase === "entry" ? 1 : 0, zIndex: flythroughPhase === "entry" ? 2 : 1 }}
+                    playsInline autoPlay onEnded={handleFlythroughEntryEnded} />
+                  {flythroughPhase === "entry" && flythroughStills[0] && (
                     <img src={flythroughStills[0]} alt="" className="absolute inset-0 w-full h-full object-cover transition-opacity duration-500"
                       style={{ opacity: showIntroFreeze ? 1 : 0, zIndex: 3, pointerEvents: "none" }} />
+                  )}
+                  {flythroughPhase === "rooms" && flythroughRoomStills.length > 0 && (
+                    <>
+                      {flythroughPrevRoomIndex !== null && (
+                        <SceneLayer
+                          src={flythroughRoomStills[flythroughPrevRoomIndex]}
+                          active={false}
+                          isPlaying={true}
+                          getProgress={() => 1}
+                          kbParams={flythroughRoomParams[flythroughPrevRoomIndex]?.kb || { scaleFrom: 1, scaleTo: 1, panX: 0, panY: 0 }}
+                        />
+                      )}
+                      <SceneLayer
+                        key={`room-${flythroughRoomIndex}`}
+                        src={flythroughRoomStills[flythroughRoomIndex]}
+                        active={true}
+                        isPlaying={true}
+                        getProgress={getFlythroughRoomProgress}
+                        kbParams={flythroughRoomParams[flythroughRoomIndex]?.kb || { scaleFrom: 1, scaleTo: 1, panX: 0, panY: 0 }}
+                      />
+                    </>
                   )}
                 </div>
               )}
@@ -811,17 +904,17 @@ function Rundvis() {
               {flythroughStatus === "done" && flythroughVideoUrl && (
                 <div className="flex items-center gap-4 mb-2">
                   <button onClick={regenerateFlythrough} className="flex items-center gap-1.5 text-xs" style={{ color: MUTED }}>
-                    <Icon name="rotate" size={12} /> Generér forfra
+                    <Icon name="rotate" size={12} /> Generér indgangsklip forfra
                   </button>
-                  <a href={flythroughVideoUrl} download="rundvis-gennemgang.mp4" target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-xs" style={{ color: MUTED }}>
-                    <Icon name="upload" size={12} className="rotate-180" /> Gem
+                  <a href={flythroughVideoUrl} download="rundvis-indgang.mp4" target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-xs" style={{ color: MUTED }}>
+                    <Icon name="upload" size={12} className="rotate-180" /> Gem indgangsklip
                   </a>
                 </div>
               )}
 
               {flythroughStatus === "done" && flythroughVideoUrl && (
                 <p className="text-[10px] mb-4" style={{ color: MUTED }}>
-                  Videolinket fra Luma udløber efter ca. 1 time — gem videoen ("Gem"-knappen) inden da.
+                  Kun AI-indgangsklippet kan gemmes som video (link fra Luma udløber efter ca. 1 time) — resten af gennemgangen er en live pan/zoom-visning her på siden, ikke en samlet videofil endnu.
                 </p>
               )}
 
@@ -832,7 +925,7 @@ function Rundvis() {
               )}
             </div>
 
-            <button onClick={() => setStep(scenes.length > 0 ? 3 : 2)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm mt-6" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> {scenes.length > 0 ? "Ret manuskript" : "Tilbage til billeder"}</button>
+<button onClick={() => setStep(scenes.length > 0 ? 3 : 2)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm mt-6" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> {scenes.length > 0 ? "Ret manuskript" : "Tilbage til billeder"}</button>
           </section>
         )}
       </main>

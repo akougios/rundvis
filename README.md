@@ -67,32 +67,38 @@ Sæt `ANTHROPIC_API_KEY` i en `.env` fil eller via `vercel env pull` først.
 
 ## AI-gennemgang (eksperimentel, `/api/generate-flythrough/*`)
 
-En separat, dyrere pipeline der genererer en ægte AI-video (ikke CSS-simuleret)
-ud fra op til 8 billeder, via Luma Ray (model `ray-3.2`, Luma's nuværende
-Agents API på `agents.lumalabs.ai/v1`). Den bruger Luma's **multi-keyframe
-mode**: alle billederne sendes i ét samlet kald (`video.keyframes` — op til
-64 billeder — + `video.keyframe_indexes`, som placerer hvert billede jævnt
-fordelt på en tids-akse), i stedet for at kæde flere separate 2-billede-klip
-sammen. Det betyder Luma ser hele rækkefølgen på én gang og planlægger ÉT
-sammenhængende, fremadrettet kamera-flow hen over den — hvilket var
-nødvendigt for at løse to problemer med den tidligere kæde-tilgang: klip der
-nogle gange bevægede sig baglæns/væk fra huset, og synligt "rodet" limede
-overgange mellem separat genererede klip.
+Matcher hvordan rigtige ejendomsvideoer typisk er klippet: IKKE én lang
+AI-genereret flyvetur gennem alle rum (Luma har intet begreb om en
+plantegning eller rum-rækkefølge udover "disse to billeder, i denne
+rækkefølge" — at bede den navigere mange rum i ét AI-kald var netop det,
+der fik den til at finde på baglæns bevægelse og rodede overgange). I
+stedet:
 
-Prompten (hardkodet server-side, i `api/generate-flythrough/create.js`)
-beder eksplicit om en kamera-bevægelse der **kun bevæger sig fremad** —
-aldrig baglæns, aldrig væk fra bygningen — i nøjagtig den rækkefølge
-billederne er uploadet i (facade → dør → rum → rum...).
+1. **Ét kort, ægte AI-klip** (`api/generate-flythrough/create.js`, Luma Ray
+   `ray-3.2`, 5 sek., 720p) der viser kameraet bevæge sig fra facade-billedet
+   og ind ad hoveddøren til det første indendørs billede. Kun disse 2
+   billeder sendes nogensinde til Luma, uanset hvor mange rum-billeder man
+   uploader — billigt og pålideligt, fordi det er én veldefineret overgang
+   i stedet for en hel rute.
+2. **Resten af billederne** (rum for rum) vises som en pan/zoom-montage
+   (Ken Burns-effekt) direkte i browseren — samme teknik som den
+   scriptede/voiceover-visning øverst i appen (`kenBurnsParamsFor`,
+   `SceneLayer`). Ingen AI involveret her, så ingen risiko for AI-fejl i
+   rum-billederne, og ingen ekstra Luma-omkostning. Hvert billede vises i
+   en varieret varighed (nogle hurtige, nogle langsomme zooms) for et mere
+   levende, redigeret udtryk, med bløde crossfades mellem dem.
+
+Kun indgangsklippet kan gemmes som en selvstændig videofil (linket fra Luma
+udløber efter ca. 1 time) — rum-montagen er i skrivende stund kun en live
+visning på siden, ikke en samlet eksporterbar videofil (samme begrænsning
+som den scriptede voiceover-visning: "Der er ingen eksport til mp4" gælder
+stadig).
 
 **Vigtigt om Luma-nøgler:** Luma migrerede i 2026 til en ny API
 (`agents.lumalabs.ai`, nøgler i formatet `luma-api-...`). Den gamle
 `api.lumalabs.ai/dream-machine/v1`-integration accepterer ikke disse nye
 nøgler og fejler med "Not authenticated" — koden her bruger den nye API.
 
-Der genereres nu kun ÉN video for hele gennemgangen (5 sek. ved præcis 2
-billeder, ellers 10 sek.) — ikke længere separate klip man kan regenerere
-enkeltvis. Fejler resultatet, må hele gennemgangen genereres forfra
-("Generér forfra"-knappen). Kvaliteten bør stadig testes på rigtige
-boligbilleder før det bruges i praksis. Ingen voiceover i denne pipeline;
-kun det visuelle (+ evt. den eksisterende ambient baggrundsmusik, som endnu
-ikke er koblet på afspilleren for dette flow).
+Ingen voiceover i denne pipeline; kun det visuelle (+ evt. den eksisterende
+ambient baggrundsmusik, som endnu ikke er koblet på afspilleren for dette
+flow).
