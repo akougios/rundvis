@@ -404,6 +404,7 @@ function Rundvis() {
   // but a real "coming through the door" moment plus a nicely edited slideshow of the individual
   // rooms. It's also far cheaper: only 2 photos ever go to Luma, no matter how many rooms there are.
   const MAX_FLYTHROUGH_IMAGES = 8;
+  const FLYTHROUGH_ENTRY_KEYFRAME_COUNT = 4; // must match ENTRY_KEYFRAME_COUNT in api/generate-flythrough/create.js - how many of the uploaded photos (facade, entry, + a couple rooms) go into the one AI clip; the rest are shown as a Ken-Burns montage
   const FLYTHROUGH_MAX_DIMENSION = 1600; // client-side resize cap before upload - Luma renders at 720p anyway, so a full-res phone photo (often 5-15MB) only slows the upload and inflates storage for no visual gain
 
   // Downscale a data-URL image in the browser (canvas) before it's uploaded.
@@ -470,7 +471,7 @@ function Rundvis() {
       const res = await fetch("/api/generate-flythrough/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageUrls: urls.slice(0, 2), aspectRatio: "9:16" }),
+        body: JSON.stringify({ imageUrls: urls.slice(0, FLYTHROUGH_ENTRY_KEYFRAME_COUNT), aspectRatio: "9:16" }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Kunne ikke starte gennemgangen.");
@@ -495,7 +496,7 @@ function Rundvis() {
   // each given a varied "pace" - some quicker, punchier zooms, some slow,
   // lingering glides - so the montage doesn't feel mechanical. Deterministic
   // per index (seededRandom) so it doesn't reshuffle on every re-render.
-  const flythroughRoomStills = flythroughStills.slice(2);
+  const flythroughRoomStills = flythroughStills.slice(FLYTHROUGH_ENTRY_KEYFRAME_COUNT);
   const flythroughRoomParams = useMemo(
     () =>
       flythroughRoomStills.map((_, i) => {
@@ -834,17 +835,17 @@ function Rundvis() {
               {scenes.length === 0 && <h1 className="font-display text-2xl mb-1">AI-gennemgang</h1>}
               {scenes.length > 0 && <h2 className="font-display text-lg mb-1">AI-gennemgang <span className="text-xs font-normal" style={{ color: MUTED }}>(eksperimentel)</span></h2>}
               <p className="text-xs mb-1" style={{ color: MUTED }}>
-                Laver en kort AI-video hvor kameraet bevæger sig ind ad hoveddøren (ud fra de første 2 billeder), efterfulgt af en filmisk gennemgang af de øvrige {Math.max(Math.min(images.length, MAX_FLYTHROUGH_IMAGES) - 2, 0)} rum med pan/zoom-effekter i varieret tempo — ligesom en rigtig redigeret rundvisningsvideo. Upload i den rækkefølge man skal bevæge sig: facade/udefra først, så indgang, så rum for rum.
+                Laver en kort AI-video hvor kameraet bevæger sig ind ad hoveddøren og videre gennem de {Math.max(Math.min(Math.min(images.length, MAX_FLYTHROUGH_IMAGES), FLYTHROUGH_ENTRY_KEYFRAME_COUNT) - 1, 1)} første rum, efterfulgt af en filmisk gennemgang af de øvrige {Math.max(Math.min(images.length, MAX_FLYTHROUGH_IMAGES) - FLYTHROUGH_ENTRY_KEYFRAME_COUNT, 0)} rum med pan/zoom-effekter i varieret tempo — ligesom en rigtig redigeret rundvisningsvideo. Upload i den rækkefølge man skal bevæge sig: facade/udefra først, så indgang, så rum for rum.
               </p>
               <p className="text-xs mb-1" style={{ color: MUTED }}>
-                Kun de første 2 billeder sendes til Luma (~5 sek. AI-video) — resten vises som ren pan/zoom af de rigtige fotos, uden AI, så der ikke er risiko for AI-fejl i selve rum-billederne. Tager typisk 1-2 minutter og koster reelt hos Luma. Brug med måde mens jeres Luma-saldo er lav.
+                Kun de første {Math.min(Math.min(images.length, MAX_FLYTHROUGH_IMAGES), FLYTHROUGH_ENTRY_KEYFRAME_COUNT)} billeder sendes til Luma (AI-video) — resten vises som ren pan/zoom af de rigtige fotos, uden AI, så der ikke er risiko for AI-fejl i selve rum-billederne. Tager typisk 1-2 minutter og koster reelt hos Luma. Brug med måde mens jeres Luma-saldo er lav.
               </p>
               <p className="text-xs mb-4" style={{ color: MUTED }}>
                 Tip til bedre resultat: tag billede 2 (det første indendørs) stående lige inden for døren med front ind i rummet — så ser overgangen fra billede 1 ud som ét naturligt skridt videre, ikke et spring.
               </p>
               {images.length >= 2 && flythroughStatus === "idle" && (
                 <p className="text-xs mb-4" style={{ color: MUTED }}>
-                  Dette genererer <strong style={{ color: TEXT }}>ét AI-indgangsklip</strong> (~5 sek.) + en pan/zoom-gennemgang af de resterende {Math.max(Math.min(images.length, MAX_FLYTHROUGH_IMAGES) - 2, 0)} billeder.
+                  Dette genererer <strong style={{ color: TEXT }}>ét AI-indgangsklip</strong> (facade + de {Math.max(Math.min(Math.min(images.length, MAX_FLYTHROUGH_IMAGES), FLYTHROUGH_ENTRY_KEYFRAME_COUNT) - 1, 1)} næste billeder) + en pan/zoom-gennemgang af de resterende {Math.max(Math.min(images.length, MAX_FLYTHROUGH_IMAGES) - FLYTHROUGH_ENTRY_KEYFRAME_COUNT, 0)} billeder.
                 </p>
               )}
 
