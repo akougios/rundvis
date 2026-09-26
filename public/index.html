@@ -492,13 +492,13 @@ function Rundvis() {
     if (flythroughImageUrls.length > 0) runFlythrough(flythroughImageUrls);
   };
 
-  // Room photos (everything after the AI entry clip): still photos with
-  // only a subtle, slow drift - NOT the same amount of zoom/pan as the
-  // scripted-scene Ken Burns effect, which felt too much like "flying
-  // through" the rooms. Small scale/pan amplitude + longer, fairly uniform
-  // durations, so it reads as a calm still-photo montage rather than
-  // camera movement. Deterministic per index (seededRandom) so it doesn't
-  // reshuffle on every re-render.
+  // Room photos (everything after the AI entry clip): a classic, slow
+  // real-estate-listing still-photo presentation - each photo gets EITHER
+  // a barely-there zoom OR a barely-there pan (never both at once,
+  // alternating room to room), held for a long, calm duration. This is
+  // deliberately much gentler than the scripted-scene Ken Burns effect,
+  // which read as "flying through" the rooms at this pace. Deterministic
+  // per index (seededRandom) so it doesn't reshuffle on every re-render.
   const flythroughRoomStills = flythroughStills.slice(FLYTHROUGH_ENTRY_KEYFRAME_COUNT);
   const flythroughRoomParams = useMemo(
     () =>
@@ -506,15 +506,20 @@ function Rundvis() {
         const r1 = seededRandom(i * 53.173 + 9.31);
         const r2 = seededRandom(i * 19.61 + 4.7);
         const r3 = seededRandom(i * 8.11 + 1.9);
+        const isZoomMove = i % 2 === 0; // alternate: zoom-only, then pan-only, then zoom-only...
         const zoomIn = r1 > 0.5;
-        const scaleAmt = 1.03 + r2 * 0.03; // 1.03 - 1.06: barely-there zoom, not a swoop
-        const panX = (r3 - 0.5) * 2.5; // -1.25% .. 1.25%
-        const panY = (r1 - 0.5) * 1.8; // -0.9% .. 0.9%
-        const durationMs = 3800 + r2 * 1400; // ~3.8-5.2s, all slow - no punchy fast variant
-        return {
-          durationMs,
-          kb: { scaleFrom: zoomIn ? 1.0 : scaleAmt, scaleTo: zoomIn ? scaleAmt : 1.0, panX, panY },
-        };
+        const scaleAmt = 1.02 + r2 * 0.02; // 1.02 - 1.04: barely perceptible zoom
+        const panAmt = 1.4 + r3 * 1.0; // 1.4% - 2.4% travel
+        const panHorizontal = r2 > 0.5;
+        const durationMs = 5800 + r2 * 1800; // ~5.8-7.6s, slow classic listing pace
+        const kb = isZoomMove
+          ? { scaleFrom: zoomIn ? 1.0 : scaleAmt, scaleTo: zoomIn ? scaleAmt : 1.0, panX: 0, panY: 0 }
+          : {
+              scaleFrom: 1.015, scaleTo: 1.015, // a hair of zoom so the pan has room to move without showing edges
+              panX: panHorizontal ? (r1 > 0.5 ? panAmt : -panAmt) : 0,
+              panY: panHorizontal ? 0 : (r1 > 0.5 ? panAmt : -panAmt),
+            };
+        return { durationMs, kb };
       }),
     // eslint-disable-next-line
     [flythroughRoomStills.length]
