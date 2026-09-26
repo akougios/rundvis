@@ -53,7 +53,7 @@ export default async function handler(req, res) {
         prompt: "Real estate drone walkthrough video. The camera moves steadily forward, floating smoothly like a drone or steadicam through the interior of a home, gliding from one space toward the next as if continuing into the next room. Cinematic, professional real-estate listing footage, wide field of view, slow and deliberate forward motion, gentle parallax, no jump cuts, no shaking, no zoom-in-place — continuous glide only.",
         aspect_ratio: aspectRatio || "9:16",
         video: {
-          resolution: "1080p",
+          resolution: "720p",
           duration: "5s",
           start_frame: { url: startImageUrl },
           end_frame: { url: endImageUrl },
