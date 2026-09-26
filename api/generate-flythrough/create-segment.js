@@ -54,7 +54,7 @@ export default async function handler(req, res) {
         aspect_ratio: aspectRatio || "9:16",
         video: {
           resolution: "1080p",
-          duration: "10s",
+          duration: "5s",
           start_frame: { url: startImageUrl },
           end_frame: { url: endImageUrl },
         },
