@@ -111,7 +111,7 @@ async function estimateDepthCanvas(dataUrl) {
 }
 
 // ---- Shared parallax engine -------------------------------------------------------------
-// Everything below is used by BOTH the live preview (ParallaxLayer) and the file export
+// Everything below is used by BOTH the live preview (FlythroughStage) and the file export
 // (exportFlythroughVideo), so the downloaded video is frame-for-frame what was previewed.
 
 const PX_FOV = 70;        // wide, like the 16-24mm lenses listing photos are actually shot on.
@@ -502,127 +502,136 @@ function SceneLayer({ src, active, isPlaying, getProgress, kbParams, fadeMs }) {
   );
 }
 
-// One 3D-parallax-animated image layer: builds a depth-displaced mesh from a photo + its depth
-// map (buildParallaxScene) and flies a virtual camera through it (shotCameraAt). Mirrors
-// SceneLayer's active/fade lifecycle so it can be swapped the exact same way.
-function ParallaxLayer({ src, depthCanvas, active, getProgress, spec, fadeMs }) {
-  const containerRef = useRef(null);
-  const [faded, setFaded] = useState(false);
-  const stateRef = useRef(null); // { renderer, camera, scene, spec, s, homeZ, maxDisp }
+// The whole walkthrough on ONE canvas. Every shot's scene is built up front and then played
+// from a single renderer, which is what keeps the cut between two shots clean.
+//
+// The previous design mounted one WebGL layer per shot and swapped them. Because each layer
+// rebuilt its scene when its src prop changed, BOTH the outgoing and the incoming layer were
+// rebuilding at the same moment, and neither drew anything while they did - a full black frame
+// at every cut. Here nothing is rebuilt during playback at all.
+//
+// Composition mirrors exportFlythroughVideo exactly: render the shot in WebGL, blit it onto a
+// 2D canvas, and crossfade by drawing the outgoing shot underneath at a falling alpha. Preview
+// and export therefore run the same code and cannot drift apart.
+function FlythroughStage({ stills, depths, specs, onError }) {
+  const hostRef = useRef(null);
 
   useEffect(() => {
-    setFaded(false);
-    const t = requestAnimationFrame(() => setFaded(true));
-    return () => cancelAnimationFrame(t);
-  }, [src]);
-
-  // Builds the renderer + depth-displaced mesh once per src/depth pair, then keeps the camera
-  // fitted to whatever size the container actually is.
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || !depthCanvas || typeof THREE === "undefined") return;
+    const host = hostRef.current;
+    if (!host || typeof THREE === "undefined" || stills.length === 0) return;
     let disposed = false;
-    let built = null;
+    let raf = 0;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    const canvasEl = renderer.domElement;
-    // The canvas is sized in CSS percentages and its BUFFER is sized from the observer below.
-    // The previous version wrote fixed pixel dimensions read once at mount, which is what let a
-    // phone end up with a canvas shorter than its parent and black bars above and below it.
-    canvasEl.style.width = "100%";
-    canvasEl.style.height = "100%";
-    canvasEl.style.display = "block";
-    container.innerHTML = "";
-    container.appendChild(canvasEl);
+    const out = document.createElement("canvas");
+    out.style.width = "100%";
+    out.style.height = "100%";
+    out.style.display = "block";
+    const octx = out.getContext("2d");
+    host.innerHTML = "";
+    host.appendChild(out);
 
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(1);
     const camera = new THREE.PerspectiveCamera(PX_FOV, 1, 0.02, 20);
 
-    // Re-derives everything that depends on the container's CURRENT size: buffer size, aspect,
-    // camera distance, depth scale and how much of the designed move actually fits. Called on
-    // build and from a ResizeObserver, so a rotated phone, a collapsing URL bar or a late
-    // stylesheet can never leave a stale canvas behind.
+    let shots = null;
+    let dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let W = 0, H = 0;
+
+    // Re-derives everything that depends on the container's CURRENT size. Reading the size here
+    // rather than once at mount is what stops a late stylesheet or a rotated phone from leaving
+    // a canvas that doesn't match its box - the cause of the black bars reported on mobile.
     const refit = () => {
-      if (!built || disposed) return;
-      const w = Math.round(container.clientWidth);
-      const h = Math.round(container.clientHeight);
-      if (w < 2 || h < 2) return;
-      renderer.setSize(w, h, false);
-      camera.aspect = w / h;
+      if (disposed) return false;
+      const cw = host.clientWidth, ch = host.clientHeight;
+      if (cw < 2 || ch < 2) return false;
+      const nw = Math.round(cw * dpr), nh = Math.round(ch * dpr);
+      if (nw === W && nh === H) return true;
+      W = nw; H = nh;
+      out.width = W;
+      out.height = H;
+      renderer.setSize(W, H, false);
+      camera.aspect = W / H;
       camera.updateProjectionMatrix();
-      const fit = fitParallaxCamera(built.planeW, built.planeH, w / h);
-      built.mesh.scale.z = fit.maxDisp;
-      built.plate.position.z = -fit.maxDisp;
-      stateRef.current = {
-        renderer,
-        camera,
-        scene: built.scene,
-        spec,
-        homeZ: fit.homeZ,
-        maxDisp: fit.maxDisp,
-        s: safeShotAmplitude(camera, spec, fit.homeZ, fit.maxDisp, built.planeW, built.planeH),
-      };
+      if (shots) {
+        for (const s of shots) {
+          const fit = fitParallaxCamera(s.built.planeW, s.built.planeH, W / H);
+          s.built.mesh.scale.z = fit.maxDisp;
+          s.built.plate.position.z = -fit.maxDisp;
+          s.homeZ = fit.homeZ;
+          s.maxDisp = fit.maxDisp;
+          s.s = safeShotAmplitude(camera, s.spec, fit.homeZ, fit.maxDisp, s.built.planeW, s.built.planeH);
+        }
+      }
+      return true;
     };
 
-    loadImageEl(src)
-      .then((img) => {
+    const build = async () => {
+      const built = [];
+      for (let i = 0; i < stills.length; i++) {
+        const img = await loadImageEl(stills[i]);
         if (disposed) return;
-        // Fewer segments on phones: the mesh is the only heavy thing on screen, but 200x200 on
-        // a mid-range handset costs more than it gives.
         const segments = window.innerWidth < 520 ? 140 : 200;
-        built = buildParallaxScene(img, depthCanvas, segments);
-        refit();
-      })
-      .catch(() => {});
+        built.push({ built: buildParallaxScene(img, depths[i], segments), spec: specs[i], homeZ: 1, maxDisp: 0.2, s: 0 });
+      }
+      if (disposed) return;
+      shots = built;
+      W = H = 0; // force refit to fit every freshly built scene
+      refit();
+      start();
+    };
+
+    const drawShot = (shot, t) => {
+      renderShotFrame({ renderer, camera, scene: shot.built.scene, spec: shot.spec, s: shot.s, homeZ: shot.homeZ, maxDisp: shot.maxDisp }, t);
+      return renderer.domElement;
+    };
+
+    const total = () => shots.reduce((a, s) => a + s.spec.durationMs, 0);
+
+    const start = () => {
+      const t0 = performance.now();
+      const tick = () => {
+        if (disposed || !shots) return;
+        raf = requestAnimationFrame(tick);
+        if (!refit()) return;
+        const tMs = (performance.now() - t0) % total();
+        let acc = 0, idx = shots.length - 1;
+        for (let i = 0; i < shots.length; i++) {
+          if (tMs < acc + shots[i].spec.durationMs) { idx = i; break; }
+          acc += shots[i].spec.durationMs;
+        }
+        if (idx === shots.length - 1) acc = total() - shots[idx].spec.durationMs;
+        const local = tMs - acc;
+        octx.globalAlpha = 1;
+        if (local < EXPORT_FADE_MS) {
+          // Crossfade from the shot before this one - the last one when looping round.
+          const prev = shots[(idx - 1 + shots.length) % shots.length];
+          octx.drawImage(drawShot(prev, 1), 0, 0, W, H);
+          octx.globalAlpha = clamp01(local / EXPORT_FADE_MS);
+        }
+        octx.drawImage(drawShot(shots[idx], local / shots[idx].spec.durationMs), 0, 0, W, H);
+        octx.globalAlpha = 1;
+      };
+      raf = requestAnimationFrame(tick);
+    };
+
+    build().catch((e) => { if (!disposed && onError) onError(e.message || "Kunne ikke bygge 3D-scenen."); });
 
     const ro = new ResizeObserver(() => refit());
-    ro.observe(container);
+    ro.observe(host);
 
     return () => {
       disposed = true;
+      cancelAnimationFrame(raf);
       ro.disconnect();
-      stateRef.current = null;
-      disposeParallaxScene(built);
+      if (shots) shots.forEach((s) => disposeParallaxScene(s.built));
       renderer.dispose();
-      if (container) container.innerHTML = "";
+      host.innerHTML = "";
     };
     // eslint-disable-next-line
-  }, [src, depthCanvas, spec]);
+  }, [stills, depths, specs]);
 
-  // Drives the camera along its path every frame while active; holds the final frame once not.
-  useEffect(() => {
-    let raf;
-    const draw = (t) => {
-      const st = stateRef.current;
-      if (!st || !st.scene) return false;
-      renderShotFrame(st, clamp01(t));
-      return true;
-    };
-    if (active) {
-      const tick = () => {
-        draw(getProgress());
-        raf = requestAnimationFrame(tick);
-      };
-      raf = requestAnimationFrame(tick);
-    } else {
-      // Keep trying briefly: the outgoing layer may still be building when it is asked to hold.
-      let tries = 0;
-      const hold = () => {
-        if (!draw(1) && ++tries < 120) raf = requestAnimationFrame(hold);
-      };
-      raf = requestAnimationFrame(hold);
-    }
-    return () => cancelAnimationFrame(raf);
-    // eslint-disable-next-line
-  }, [active, spec, src]);
-
-  return (
-    <div
-      ref={containerRef}
-      className={`kb-fade absolute inset-0 w-full h-full ${faded ? "kb-fade-in" : ""}`}
-      style={{ zIndex: active ? 2 : 1, ...(fadeMs ? { transitionDuration: `${fadeMs}ms` } : {}) }}
-    />
-  );
+  return <div ref={hostRef} className="absolute inset-0 w-full h-full" />;
 }
 
 // ---- Video export -----------------------------------------------------------------------
@@ -786,9 +795,6 @@ function Rundvis() {
   const [flythroughProgress, setFlythroughProgress] = useState({ current: 0, total: 0 });
   const [flythroughStills, setFlythroughStills] = useState([]); // resized data-URLs actually used, in upload order
   const [flythroughDepths, setFlythroughDepths] = useState([]); // matching depth-map canvases, one per still
-  const [flythroughIndex, setFlythroughIndex] = useState(0);
-  const [flythroughPrevIndex, setFlythroughPrevIndex] = useState(null);
-  const flythroughStartRef = useRef(0);
 
   // Video export state: the walkthrough is rendered to a real file in the browser (see
   // exportFlythroughVideo), so an agent can actually post it instead of only viewing it here.
@@ -1053,8 +1059,6 @@ function Rundvis() {
       }
       setFlythroughStills(stills);
       setFlythroughDepths(depths);
-      setFlythroughIndex(0);
-      setFlythroughPrevIndex(null);
       setFlythroughStatus("done");
     } catch (err) {
       setFlythroughError(err.message || "3D-gennemgangen fejlede.");
@@ -1070,11 +1074,6 @@ function Rundvis() {
     // eslint-disable-next-line
     [flythroughStills.length]
   );
-
-  const getFlythroughProgress = () => {
-    const dur = flythroughParams[flythroughIndex]?.durationMs || 3000;
-    return (performance.now() - flythroughStartRef.current) / dur;
-  };
 
   // Renders the walkthrough to a downloadable file in the requested aspect ratio. The heavy
   // work happens in exportFlythroughVideo; this only tracks progress and hands back a blob URL.
@@ -1104,31 +1103,6 @@ function Rundvis() {
       setExportStatus("error");
     }
   };
-
-  const advanceFlythrough = () => {
-    setFlythroughIndex((i) => {
-      const next = i + 1;
-      setFlythroughPrevIndex(i);
-      return next >= flythroughStills.length ? 0 : next; // loop the whole show
-    });
-  };
-
-  // Drives the show: holds each photo for its own duration, then advances (looping at the end).
-  useEffect(() => {
-    if (flythroughStatus !== "done" || flythroughStills.length === 0) return;
-    flythroughStartRef.current = performance.now();
-    const dur = flythroughParams[flythroughIndex]?.durationMs || 5500;
-    const t = setTimeout(advanceFlythrough, dur);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line
-  }, [flythroughStatus, flythroughIndex, flythroughStills.length]);
-
-  // Clears the outgoing layer shortly after the incoming one has finished its crossfade-in.
-  useEffect(() => {
-    if (flythroughPrevIndex === null) return;
-    const t = setTimeout(() => setFlythroughPrevIndex(null), 1100);
-    return () => clearTimeout(t);
-  }, [flythroughPrevIndex]);
 
   const togglePlay = () => {
     if (isPlaying) {
@@ -1413,24 +1387,11 @@ function Rundvis() {
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="relative rounded-lg overflow-hidden mb-4" style={{ backgroundColor: "#000", aspectRatio: "9/16", maxWidth: 320 }}>
-                  {flythroughPrevIndex !== null && (
-                    <ParallaxLayer
-                      src={flythroughStills[flythroughPrevIndex]}
-                      depthCanvas={flythroughDepths[flythroughPrevIndex]}
-                      active={false}
-                      getProgress={() => 1}
-                      spec={flythroughParams[flythroughPrevIndex]}
-                      fadeMs={EXPORT_FADE_MS}
-                    />
-                  )}
-                  <ParallaxLayer
-                    key={`shot-${flythroughIndex}`}
-                    src={flythroughStills[flythroughIndex]}
-                    depthCanvas={flythroughDepths[flythroughIndex]}
-                    active={true}
-                    getProgress={getFlythroughProgress}
-                    spec={flythroughParams[flythroughIndex]}
-                    fadeMs={EXPORT_FADE_MS}
+                  <FlythroughStage
+                    stills={flythroughStills}
+                    depths={flythroughDepths}
+                    specs={flythroughParams}
+                    onError={(m) => { setFlythroughError(m); setFlythroughStatus("error"); }}
                   />
                 </div>
               )}
