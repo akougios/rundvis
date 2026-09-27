@@ -5,7 +5,7 @@
 // must show the property that is actually for sale. So every prompt below says what the CAMERA
 // does and states, repeatedly and concretely, that the room itself must not change.
 
-import { FAL_MODEL, falKeyOrRespond, falHeaders } from "../_fal.js";
+import { resolveModel, falKeyOrRespond, falHeaders } from "../_fal.js";
 
 // Shared across every shot. Kept short and concrete - long flowery prompts make these models
 // invent atmosphere, which is exactly what we do not want.
@@ -25,6 +25,8 @@ const MOTION = {
   orbit: "The camera arcs slowly and steadily sideways around the room, staying level.",
 };
 
+// Names the failure modes these models actually produce on interiors, rather than generic
+// "low quality" filler.
 const NEGATIVE_PROMPT =
   "warping, morphing, melting, distortion, bending walls, curved straight lines, wobbling " +
   "furniture, flickering, changing layout, new objects appearing, people, animals, text, " +
@@ -39,31 +41,30 @@ export default async function handler(req, res) {
   const key = falKeyOrRespond(res);
   if (!key) return;
 
-  const { imageUrl, motion, duration } = req.body || {};
+  const { imageUrl, motion, model, aspectRatio, seed } = req.body || {};
   if (!imageUrl || typeof imageUrl !== "string" || !/^https:\/\//.test(imageUrl)) {
     res.status(400).json({ error: "Mangler et gyldigt billede-URL (https)." });
     return;
   }
 
+  const m = resolveModel(model);
   const motionLine = MOTION[motion] || MOTION.push;
-  // 5s is this model's shortest clip. That suits us: the edit only uses the first couple of
-  // seconds of each clip, and the opening seconds are where the model stays closest to the
-  // original photograph - drift grows the longer it runs.
-  const seconds = duration === 10 ? "10" : "5";
 
   try {
-    const r = await fetch(`https://queue.fal.run/${FAL_MODEL}`, {
+    const input = m.build({
+      imageUrl,
+      prompt: `${BASE_PROMPT} ${motionLine}`,
+      negativePrompt: NEGATIVE_PROMPT,
+      aspectRatio,
+      // Only used by models that support it; a fixed seed per photo index means a regenerated
+      // walkthrough is identical on those models.
+      seed: typeof seed === "number" ? seed : undefined,
+    });
+
+    const r = await fetch(`https://queue.fal.run/${m.endpoint}`, {
       method: "POST",
       headers: falHeaders(key),
-      body: JSON.stringify({
-        prompt: `${BASE_PROMPT} ${motionLine}`,
-        start_image_url: imageUrl,
-        duration: seconds,
-        negative_prompt: NEGATIVE_PROMPT,
-        // Audio would be generated speech or ambience we do not want, and it roughly doubles
-        // the price per second.
-        generate_audio: false,
-      }),
+      body: JSON.stringify(input),
     });
 
     const text = await r.text();
@@ -71,8 +72,13 @@ export default async function handler(req, res) {
     try { data = JSON.parse(text); } catch (e) { data = null; }
 
     if (!r.ok) {
-      const detail = (data && (data.detail || data.error || data.message)) || text.slice(0, 300);
-      res.status(r.status).json({ error: `Videotjenesten afviste kaldet: ${typeof detail === "string" ? detail : JSON.stringify(detail)}` });
+      // fal's validation errors name the offending field, which is exactly what is needed when
+      // a model's schema differs from what the registry assumed - so it is passed through
+      // rather than replaced with something generic.
+      const detail = (data && (data.detail || data.error || data.message)) || text.slice(0, 400);
+      res.status(r.status).json({
+        error: `${m.label} afviste kaldet: ${typeof detail === "string" ? detail : JSON.stringify(detail)}`,
+      });
       return;
     }
 
@@ -82,6 +88,8 @@ export default async function handler(req, res) {
       requestId: data.request_id,
       statusUrl: data.status_url,
       responseUrl: data.response_url,
+      model: m.key,
+      modelLabel: m.label,
     });
   } catch (err) {
     res.status(500).json({ error: `Kunne ikke starte videoklippet: ${err.message}` });

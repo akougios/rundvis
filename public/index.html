@@ -780,6 +780,22 @@ function Rundvis() {
   const [hqProgress, setHqProgress] = useState({ current: 0, total: 0, phase: "" });
   const [hqError, setHqError] = useState("");
   const [hqClips, setHqClips] = useState(null); // array of clip URLs, one per still (null = not generated)
+  const [hqModel, setHqModel] = useState(null);   // chosen model key; null until the registry loads
+  const [hqModels, setHqModels] = useState([]);   // registry from /api/generate-clip/models
+
+  // The model list comes from the server so there is only one place where models are defined.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/generate-clip/models")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        setHqModels(d.models || []);
+        setHqModel((cur) => cur || d.defaultModel);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const fileInputRef = useRef(null);
   const audioRef = useRef(null);
@@ -1061,21 +1077,24 @@ function Rundvis() {
   // Sends every photo to the video model and collects the finished clips. Sequential on purpose:
   // it keeps the progress readout honest, and it means a failure part-way through has cost the
   // price of the clips actually produced rather than all of them at once.
-  const CLIP_SECONDS = 5;          // the model's shortest clip
-  const CLIP_PRICE_USD = 0.07 * CLIP_SECONDS; // audio off; see api/_fal.js for why this model
-
-  const runHighQuality = async () => {
+  // Generates clips for a set of photo indexes. Passing a single index is how the "test one
+  // photo" button works: comparing three models then costs about a krone each instead of the
+  // price of three whole properties.
+  const runHighQuality = async (onlyIndexes) => {
     if (hqStatus === "working" || flythroughStills.length === 0) return;
+    const indexes = onlyIndexes || flythroughStills.map((_, i) => i);
     setHqStatus("working");
     setHqError("");
-    setHqClips(null);
     setExportStatus("idle");
     setExportFile((prev) => { if (prev) URL.revokeObjectURL(prev.url); return null; });
 
-    const clips = new Array(flythroughStills.length).fill(null);
+    // Keep clips we already paid for unless this is a full run.
+    const clips = onlyIndexes && hqClips ? hqClips.slice() : new Array(flythroughStills.length).fill(null);
+    if (!onlyIndexes) setHqClips(null);
     try {
-      for (let i = 0; i < flythroughStills.length; i++) {
-        setHqProgress({ current: i + 1, total: flythroughStills.length, phase: "upload" });
+      for (let n = 0; n < indexes.length; n++) {
+        const i = indexes[n];
+        setHqProgress({ current: n + 1, total: indexes.length, phase: "upload" });
 
         // The video service needs a publicly reachable image, so the photo goes to Blob storage
         // first (same endpoint the old Luma flow used).
@@ -1087,14 +1106,20 @@ function Rundvis() {
         const upJson = await up.json();
         if (!up.ok) throw new Error(upJson.error || "Kunne ikke uploade billedet.");
 
-        setHqProgress({ current: i + 1, total: flythroughStills.length, phase: "generate" });
+        setHqProgress({ current: n + 1, total: indexes.length, phase: "generate" });
         const create = await fetch("/api/generate-clip/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             imageUrl: upJson.url,
             motion: flythroughParams[i] ? flythroughParams[i].type : "push",
-            duration: CLIP_SECONDS,
+            model: hqModel,
+            // Generate natively in the shape the video will be shown in, rather than cropping a
+            // widescreen clip down afterwards - on the models that support it.
+            aspectRatio: previewFormat,
+            // Fixed per photo index, so on a model with a seed a regenerated walkthrough is
+            // identical rather than merely similar.
+            seed: 1000 + i,
           }),
         });
         const created = await create.json();
@@ -1502,22 +1527,62 @@ function Rundvis() {
                     er dér modellen holder sig tættest på dit foto.
                   </p>
 
+                  {hqStatus !== "working" && hqModels.length > 0 && (
+                    <div className="mb-3">
+                      <p className="text-[11px] mb-1.5" style={{ color: MUTED }}>Videomodel</p>
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {hqModels.map((m) => {
+                          const on = hqModel === m.key;
+                          return (
+                            <button
+                              key={m.key}
+                              onClick={() => setHqModel(m.key)}
+                              className="px-3 py-1.5 rounded-full text-xs whitespace-nowrap"
+                              style={{
+                                border: `1px solid ${on ? ACCENT : LINE}`,
+                                backgroundColor: on ? ACCENT : "transparent",
+                                color: on ? "#fff" : MUTED,
+                              }}
+                            >
+                              {m.label} <span style={{ opacity: 0.75 }}>{m.usdPerClip.toFixed(2)} $</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {hqModels.filter((m) => m.key === hqModel).map((m) => (
+                        <p key={m.key} className="text-[10px]" style={{ color: MUTED }}>{m.note}</p>
+                      ))}
+                    </div>
+                  )}
+
                   {hqStatus !== "working" && (
-                    <button
-                      onClick={runHighQuality}
-                      className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium"
-                      style={{ backgroundColor: ACCENT, color: "#fff" }}
-                    >
-                      <Icon name="sparkles" size={14} />
-                      {hqClips ? "Generér igen" : "Generér i høj kvalitet"}
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => runHighQuality([0])}
+                        className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium"
+                        style={{ border: `1px solid ${ACCENT}`, color: ACCENT }}
+                      >
+                        <Icon name="film" size={14} /> Test ét billede
+                      </button>
+                      <button
+                        onClick={() => runHighQuality()}
+                        className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium"
+                        style={{ backgroundColor: ACCENT, color: "#fff" }}
+                      >
+                        <Icon name="sparkles" size={14} />
+                        Generér alle {flythroughStills.length}
+                      </button>
+                    </div>
                   )}
 
                   {hqStatus !== "working" && (
                     <p className="text-[10px] mt-2" style={{ color: MUTED }}>
-                      {flythroughStills.length} klip à {CLIP_SECONDS} sek. — koster ca.{" "}
-                      {(flythroughStills.length * CLIP_PRICE_USD).toFixed(2)} $ i API-forbrug, og tager
-                      typisk et par minutter pr. klip. Klippene dukker op ét ad gangen.
+                      Start med ét billede: så koster det ca.{" "}
+                      {hqModels.filter((m) => m.key === hqModel).map((m) => m.usdPerClip.toFixed(2))[0] || "0,35"} $ at
+                      se hvordan modellen klarer dine fotos, og du kan sammenligne modellerne for småpenge før du
+                      kører hele boligen. Hele boligen koster ca.{" "}
+                      {((hqModels.filter((m) => m.key === hqModel)[0]?.usdPerClip || 0.35) * flythroughStills.length).toFixed(2)} $.
+                      Regn med et par minutter pr. klip.
                     </p>
                   )}
 

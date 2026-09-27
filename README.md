@@ -173,10 +173,27 @@ billederne bevæger sig.
 | Variabel | Bruges til |
 |---|---|
 | `FAL_KEY` | fal.ai-nøgle til videogenerering. Uden den virker storyboardet stadig; kun "Generér i høj kvalitet" fejler, med en forklarende besked. |
-| `FAL_MODEL` | Valgfri. Standard er `fal-ai/kling-video/v2.6/pro/image-to-video`. Kan skiftes uden kodeændring. |
+| `FAL_MODEL_KEY` | Valgfri. Hvilken model der er forvalgt i brugerfladen: `kling-2.6-pro` (standard), `seedance-1-pro` eller `luma-ray2`. Brugeren kan skifte i appen uanset. |
 | `BLOB_READ_WRITE_TOKEN` | Vercel Blob. Videomodellen kræver et offentligt tilgængeligt billede-URL. |
 
-**Pris:** ~0,35 $ pr. klip (5 sek., lyd slået fra). En bolig med 8 rum koster
-altså ca. 2,80 $ i API-forbrug. Seedance 2.0 giver bedre bevægelse, men
-koster 0,68 $/sek. i 1080p — ca. 27 $ for samme bolig, hvilket ikke hænger
+### Modelvalg
+
+Der er med vilje ikke valgt én "bedste" model, for de tre adskiller sig på
+måder der først viser sig på rigtige boligfotos:
+
+| Model | Pr. klip | Bolig m. 8 rum | Hvorfor den |
+|---|---|---|---|
+| Kling 2.6 Pro | ~0,35 $ (5s) | ~2,80 $ | Stærk troskab mod fotoet, billigst i 1080p. Ingen seed. |
+| Seedance 1.0 Pro | ~0,37 $ (3s) | ~2,98 $ | **Har seed** — samme input giver samme klip, hvilket matcher produktets løfte. Frit valg af længde, så vi kun betaler for de sekunder klipningen bruger. |
+| Luma Ray 2 | ~0,20 $ (5s) | ~1,60 $ | Mest filmisk kamerasprog (dolly, orbit, crane) og billigst. |
+
+Seedance 2.0 rangeres højest på troskab i offentlige sammenligninger, men
+koster 0,68 $/sek. i 1080p — ca. 27 $ for én bolig, hvilket ikke hænger
 sammen med markedets 9–15 $ pr. video.
+
+**De gamle Luma-problemer længere oppe gjaldt to-billed-interpolation**, som
+er en helt anden og sværere opgave end at animere ét billede. De er derfor
+ikke et argument mod Ray 2 her.
+
+Brug "Test ét billede" i appen til at sammenligne modellerne på dine egne
+fotos for under en krone pr. model, før du kører en hel bolig.
