@@ -123,7 +123,11 @@ const PX_MAX_DISP = 0.28; // depth displacement, in plane-height units. With PX_
                           // the far surface roughly twice as far from the camera as the near one,
                           // so foreground and background genuinely separate. (The old values gave
                           // a far/near ratio of about 1.19 - i.e. almost none.)
-const PX_EDGE_CUT = 0.115; // normalised depth jump across one triangle above which it is dropped
+const PX_MAX_STEP = 0.07;  // max normalised depth change per vertex pair (see limitDepthGradient).
+                           // Measured on a synthetic wall/window edge: this turns a hard jump into
+                           // a ramp ~3.8% of the image wide. Tighter (0.03) spreads it over 6.6%
+                           // and starts flattening the room; looser (0.10) narrows it to 2.4% and
+                           // the stretching becomes visible again.
 const PX_NEAR_DISP = 0.30; // disparity floor for the 1/x depth conversion (see buildParallaxScene)
 
 function clamp01(t) { return Math.max(0, Math.min(1, t)); }
@@ -183,9 +187,48 @@ function makeDepthSampler(depthCanvas) {
   };
 }
 
+// Caps how fast depth may change from one vertex to the next, by repeatedly pulling apart
+// neighbours that differ by more than maxStep.
+//
+// This replaces cutting the mesh open at depth edges. A photo has no geometry hiding behind its
+// foreground, so a hard depth edge leaves the renderer two bad options: stretch the texture
+// across the gap (rubbery), or open a hole (torn, and whatever sits behind shows through as
+// bright ragged fringes - the "flimmer" around window and rug edges).
+//
+// Bounding the gradient removes the choice. A wall-to-window jump becomes a steep ramp a few
+// percent of the image wide instead of a cliff, so there is nothing to tear along and nothing
+// to stretch violently. The eye reads the ramp as ordinary perspective.
+function limitDepthGradient(z, cols, rows, maxStep, iterations) {
+  for (let it = 0; it < iterations; it++) {
+    let worst = 0;
+    for (let y = 0; y < rows; y++) {
+      const row = y * cols;
+      for (let x = 0; x < cols - 1; x++) {
+        const i = row + x, j = i + 1;
+        const d = z[j] - z[i];
+        const over = Math.abs(d) - maxStep;
+        if (over > 0) { const e = over * 0.5 * (d > 0 ? 1 : -1); z[i] += e; z[j] -= e; if (over > worst) worst = over; }
+      }
+    }
+    for (let y = 0; y < rows - 1; y++) {
+      for (let x = 0; x < cols; x++) {
+        const i = y * cols + x, j = i + cols;
+        const d = z[j] - z[i];
+        const over = Math.abs(d) - maxStep;
+        if (over > 0) { const e = over * 0.5 * (d > 0 ? 1 : -1); z[i] += e; z[j] -= e; if (over > worst) worst = over; }
+      }
+    }
+    if (worst < maxStep * 0.02) break; // converged; the remaining passes would do nothing
+  }
+}
+
+// Set once from the first renderer created, so textures can use the GPU's real anisotropy limit.
+let PX_MAX_ANISO = 4;
+
 // Builds the scene for one photo. Geometry Z is normalised to [-1, 0] (0 = nearest), so the
 // actual depth scale is applied later as mesh.scale.z - that means a viewport resize never has
-// to rebuild the mesh.
+// to rebuild the mesh. `img` is the FULL-resolution photo: depth is estimated from a small copy,
+// but the texture the viewer actually looks at is never downscaled to match it.
 function buildParallaxScene(img, depthCanvas, segments) {
   const aspect = img.width / img.height;
   const planeH = 1, planeW = aspect;
@@ -215,53 +258,30 @@ function buildParallaxScene(img, depthCanvas, segments) {
   for (let i = 0; i < N; i++) {
     const m = Math.min(hi, Math.max(lo, metric[i]));
     zn[i] = -((m - lo) / span); // 0 = nearest, -1 = farthest
-    pos.setZ(i, zn[i]);
   }
+
+  // The mesh stays whole; only its steepness is bounded. PX_MAX_STEP is per vertex pair, so the
+  // ramp a full-range jump spreads over is about 1/PX_MAX_STEP vertices - roughly 8% of the
+  // frame at the segment counts used here.
+  limitDepthGradient(zn, segments + 1, segments + 1, PX_MAX_STEP, 120);
+  for (let i = 0; i < N; i++) pos.setZ(i, zn[i]);
   pos.needsUpdate = true;
   geo.computeVertexNormals();
 
-  // Drop triangles that straddle a big depth jump. Without this the mesh behaves like a rubber
-  // sheet and smears the foreground across whatever it is moving away from. With it, the gap
-  // simply opens - and the blurred backfill plate below shows through instead.
-  const idx = geo.index.array;
-  const kept = [];
-  for (let t = 0; t < idx.length; t += 3) {
-    const a = zn[idx[t]], b = zn[idx[t + 1]], c = zn[idx[t + 2]];
-    if (Math.max(a, b, c) - Math.min(a, b, c) <= PX_EDGE_CUT) kept.push(idx[t], idx[t + 1], idx[t + 2]);
-  }
-  geo.setIndex(new THREE.BufferAttribute(new Uint32Array(kept), 1));
-
-  const texCanvas = document.createElement("canvas");
-  texCanvas.width = img.width;
-  texCanvas.height = img.height;
-  texCanvas.getContext("2d").drawImage(img, 0, 0);
-  const tex = new THREE.CanvasTexture(texCanvas);
+  // The texture is the photo at full resolution - this is what the viewer actually looks at, and
+  // it must never be limited by whatever size the depth model needed.
+  const tex = new THREE.Texture(img);
+  tex.needsUpdate = true;
   if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.anisotropy = PX_MAX_ANISO; // keeps detail sharp where the plane is seen at an angle
   const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex }));
 
-  // Backfill plate: a blurred, slightly enlarged copy of the same photo sitting at the far end
-  // of the depth range. Anything the triangle cut opens up falls back to this rather than to
-  // black, which reads as ordinary background defocus.
-  const pw = Math.max(64, Math.round(img.width / 3));
-  const ph = Math.max(64, Math.round(img.height / 3));
-  const plateCanvas = document.createElement("canvas");
-  plateCanvas.width = pw;
-  plateCanvas.height = ph;
-  const pctx = plateCanvas.getContext("2d");
-  pctx.filter = "blur(8px)";
-  pctx.drawImage(img, -pw * 0.06, -ph * 0.06, pw * 1.12, ph * 1.12);
-  pctx.filter = "none";
-  const plateTex = new THREE.CanvasTexture(plateCanvas);
-  if (THREE.SRGBColorSpace) plateTex.colorSpace = THREE.SRGBColorSpace;
-  const plate = new THREE.Mesh(
-    new THREE.PlaneGeometry(planeW * 1.3, planeH * 1.3),
-    new THREE.MeshBasicMaterial({ map: plateTex })
-  );
-
   const scene = new THREE.Scene();
-  scene.add(plate);
   scene.add(mesh);
-  return { scene, mesh, plate, planeW, planeH };
+  return { scene, mesh, plate: null, planeW, planeH };
 }
 
 function disposeParallaxScene(built) {
@@ -661,6 +681,7 @@ function FlythroughStage({ stills, depths, specs, onError }) {
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
     renderer.setPixelRatio(1);
+    try { PX_MAX_ANISO = Math.max(PX_MAX_ANISO, renderer.capabilities.getMaxAnisotropy()); } catch (e) {}
     const camera = new THREE.PerspectiveCamera(PX_FOV, 1, 0.02, 20);
 
     let shots = null;
@@ -686,7 +707,6 @@ function FlythroughStage({ stills, depths, specs, onError }) {
         for (const s of shots) {
           const fit = fitParallaxCamera(s.built.planeW, s.built.planeH, W / H);
           s.built.mesh.scale.z = fit.maxDisp;
-          s.built.plate.position.z = -fit.maxDisp;
           s.homeZ = fit.homeZ;
           s.maxDisp = fit.maxDisp;
           s.s = safeShotAmplitude(camera, s.spec, fit.homeZ, fit.maxDisp, s.built.planeW, s.built.planeH);
@@ -700,7 +720,7 @@ function FlythroughStage({ stills, depths, specs, onError }) {
       for (let i = 0; i < stills.length; i++) {
         const img = await loadImageEl(stills[i]);
         if (disposed) return;
-        const segments = window.innerWidth < 520 ? 140 : 200;
+        const segments = window.innerWidth < 520 ? 192 : 288;
         built.push({ built: buildParallaxScene(img, depths[i], segments), spec: specs[i], homeZ: 1, maxDisp: 0.2, s: 0 });
       }
       if (disposed) return;
@@ -749,10 +769,12 @@ function FlythroughStage({ stills, depths, specs, onError }) {
 // Renders the whole walkthrough frame by frame into one canvas and records it, reusing the
 // exact scene and camera code the live preview uses. Runs entirely in the browser: no render
 // server, no upload, no per-video cost.
+// Full HD in every orientation. The old 720-line sizes were a phone-first compromise; a listing
+// video goes on a property site and a big screen as often as it goes on Reels.
 const EXPORT_FORMATS = {
-  "9:16": { w: 720, h: 1280, label: "Reels / TikTok" },
-  "16:9": { w: 1280, h: 720, label: "YouTube / boligsite" },
-  "1:1": { w: 1000, h: 1000, label: "Instagram-feed" },
+  "16:9": { w: 1920, h: 1080, ar: 16 / 9, label: "Bredformat", where: "Boligsite, YouTube, storskærm" },
+  "9:16": { w: 1080, h: 1920, ar: 9 / 16, label: "Højformat", where: "Reels, TikTok, Stories" },
+  "1:1": { w: 1080, h: 1080, ar: 1, label: "Kvadratisk", where: "Instagram-feed" },
 };
 
 function pickRecorderMime() {
@@ -796,6 +818,7 @@ async function exportFlythroughVideo({ stills, depths, specs, format, fps = 30, 
   // preserveDrawingBuffer is required, otherwise drawImage reads an already-cleared buffer.
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
   renderer.setPixelRatio(1);
+  try { PX_MAX_ANISO = Math.max(PX_MAX_ANISO, renderer.capabilities.getMaxAnisotropy()); } catch (e) {}
   renderer.setSize(w, h, false);
   const camera = new THREE.PerspectiveCamera(PX_FOV, frameAspect, 0.02, 20);
 
@@ -809,10 +832,9 @@ async function exportFlythroughVideo({ stills, depths, specs, format, fps = 30, 
     // Build every shot up front so no frame stalls on image decoding mid-recording.
     for (let i = 0; i < stills.length; i++) {
       const img = await loadImageEl(stills[i]);
-      const built = buildParallaxScene(img, depths[i], 200);
+      const built = buildParallaxScene(img, depths[i], 288);
       const fit = fitParallaxCamera(built.planeW, built.planeH, frameAspect);
       built.mesh.scale.z = fit.maxDisp;
-      built.plate.position.z = -fit.maxDisp;
       shots.push({
         built,
         spec: specs[i],
@@ -833,7 +855,10 @@ async function exportFlythroughVideo({ stills, depths, specs, format, fps = 30, 
     const manualFrames = typeof track.requestFrame === "function";
     const liveStream = manualFrames ? stream : out.captureStream(fps);
     const chunks = [];
-    const recorder = new MediaRecorder(liveStream, { mimeType: mime, videoBitsPerSecond: 8000000 });
+    // Scaled to the pixel count: 1080p needs roughly twice the bitrate 720p did, and a slow pan
+    // across a detailed room is exactly the content that shows compression blocking.
+    const bitrate = Math.round(Math.min(24e6, Math.max(10e6, (w * h * fps) / 1000 * 0.42)));
+    const recorder = new MediaRecorder(liveStream, { mimeType: mime, videoBitsPerSecond: bitrate });
     recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
     const finished = new Promise((res) => { recorder.onstop = res; });
     recorder.start();
@@ -918,6 +943,9 @@ function Rundvis() {
   const [exportProgress, setExportProgress] = useState({ phase: "", current: 0, total: 0 });
   const [exportError, setExportError] = useState("");
   const [exportFile, setExportFile] = useState(null); // { url, name }
+  // Which shape the walkthrough is previewed in. Defaults to wide: that is how a listing video is
+  // watched on a property site, and it is the format the photos were shot in.
+  const [previewFormat, setPreviewFormat] = useState("16:9");
 
   const fileInputRef = useRef(null);
   const audioRef = useRef(null);
@@ -1133,9 +1161,15 @@ function Rundvis() {
   // always produce the exact same depth maps and therefore the exact same moves. (The old
   // Luma-based AI clip code is still in api/generate-flythrough/ but is no longer wired in here.)
   const MAX_FLYTHROUGH_IMAGES = 8;
-  const FLYTHROUGH_MAX_DIMENSION = 1100; // depth estimation + the mesh's texture only need to look good on screen, not at full photo resolution - keeps inference to a few seconds per photo
+  // Two different sizes, for two different jobs. Depth estimation is the slow step and gains
+  // nothing from a large input - a depth map is smooth by nature. The TEXTURE is what the viewer
+  // actually looks at, and downscaling it to match the depth input (as this used to) threw away
+  // the sharpness of the photos the agent uploaded. They are now kept apart.
+  const DEPTH_INPUT_MAX = 1024;   // what the model sees
+  const TEXTURE_MAX = 2560;       // what the viewer sees; enough for a 1080p export with room to push in
 
-  // Downscale a data-URL image in the browser (canvas) before depth estimation.
+  // Downscale a data-URL image in the browser (canvas). Returns the original untouched when it
+  // is already within bounds, so nothing is ever re-encoded for no reason.
   const resizeImageDataUrl = (dataUrl, maxDimension) =>
     new Promise((resolve) => {
       const img = new Image();
@@ -1145,8 +1179,11 @@ function Rundvis() {
         const canvas = document.createElement("canvas");
         canvas.width = Math.round(img.width * scale);
         canvas.height = Math.round(img.height * scale);
-        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.92));
+        const c = canvas.getContext("2d");
+        c.imageSmoothingEnabled = true;
+        c.imageSmoothingQuality = "high";
+        c.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.95));
       };
       img.onerror = () => resolve(dataUrl); // fall back to the original if decoding fails
       img.src = dataUrl;
@@ -1167,9 +1204,10 @@ function Rundvis() {
       const stills = [];
       const depths = [];
       for (let i = 0; i < used.length; i++) {
-        const resized = await resizeImageDataUrl(used[i].src, FLYTHROUGH_MAX_DIMENSION);
-        const depthCanvas = await estimateDepthCanvas(resized);
-        stills.push(resized);
+        const forDepth = await resizeImageDataUrl(used[i].src, DEPTH_INPUT_MAX);
+        const forTexture = await resizeImageDataUrl(used[i].src, TEXTURE_MAX);
+        const depthCanvas = await estimateDepthCanvas(forDepth);
+        stills.push(forTexture);
         depths.push(depthCanvas);
         setFlythroughProgress({ current: i + 1, total: used.length });
       }
@@ -1502,8 +1540,39 @@ function Rundvis() {
               {flythroughStatus === "error" && <p className="text-xs" style={{ color: AMBER }}>{flythroughError}</p>}
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
-                <div className="relative rounded-lg overflow-hidden mb-4" style={{ backgroundColor: "#000", aspectRatio: "9/16", maxWidth: 320 }}>
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  {Object.keys(EXPORT_FORMATS).map((f) => {
+                    const on = previewFormat === f;
+                    return (
+                      <button
+                        key={f}
+                        onClick={() => setPreviewFormat(f)}
+                        className="px-3 py-1.5 rounded-full text-xs whitespace-nowrap transition-colors"
+                        style={{
+                          border: `1px solid ${on ? ACCENT : LINE}`,
+                          backgroundColor: on ? ACCENT : "transparent",
+                          color: on ? "#fff" : MUTED,
+                        }}
+                      >
+                        {EXPORT_FORMATS[f].label} <span style={{ opacity: 0.75 }}>{f}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {flythroughStatus === "done" && flythroughStills.length > 0 && (
+                <div
+                  className="relative rounded-xl overflow-hidden mb-3 w-full"
+                  style={{
+                    backgroundColor: "#000",
+                    aspectRatio: previewFormat.replace(":", "/"),
+                    maxWidth: previewFormat === "9:16" ? 460 : "100%",
+                    boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
+                  }}
+                >
                   <FlythroughStage
+                    key={previewFormat}
                     stills={flythroughStills}
                     depths={flythroughDepths}
                     specs={flythroughParams}
@@ -1513,10 +1582,13 @@ function Rundvis() {
               )}
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
-                <div className="flex items-center gap-4 mb-3">
+                <div className="flex items-center gap-4 mb-4">
                   <button onClick={regenerateFlythrough} className="flex items-center gap-1.5 text-xs" style={{ color: MUTED }}>
                     <Icon name="rotate" size={12} /> Generér forfra
                   </button>
+                  <span className="text-[10px]" style={{ color: MUTED }}>
+                    {EXPORT_FORMATS[previewFormat].where}
+                  </span>
                 </div>
               )}
 
@@ -1538,7 +1610,8 @@ function Rundvis() {
                           cursor: exportStatus === "working" ? "not-allowed" : "pointer",
                         }}
                       >
-                        {EXPORT_FORMATS[f].label} <span style={{ color: MUTED }}>{f}</span>
+                        {EXPORT_FORMATS[f].label}{" "}
+                        <span style={{ color: MUTED }}>{EXPORT_FORMATS[f].w}×{EXPORT_FORMATS[f].h}</span>
                       </button>
                     ))}
                   </div>
