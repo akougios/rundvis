@@ -128,10 +128,22 @@ const PX_NEAR_DISP = 0.30; // disparity floor for the 1/x depth conversion (see 
 
 function clamp01(t) { return Math.max(0, Math.min(1, t)); }
 
-// Eases IN only. The old easeInOutSine decelerated to a standstill at BOTH ends, so every clip
-// visibly parked before the cut. Starting gently but still moving at full speed when the cut
-// lands is what makes a sequence of shots read as one continuous camera.
-function easeShot(t) { return Math.pow(clamp01(t), 1.3); }
+// Three speed curves, picked per shot by where its cut falls (see buildEditPlan). None of them
+// decelerate to a standstill: a clip that parks before the cut is the single clearest giveaway
+// of a slideshow, and the old easeInOutSine did exactly that at BOTH ends.
+//   glide  - gentle start, still moving at full speed when a dissolve begins
+//   ramp   - accelerates into a hard cut, so the cut lands on motion (the "speed ramp" look)
+//   settle - leaves a hard cut already at speed, then eases off
+// Each is a blend of a linear term and a shaped one. The linear part is the point: a pure
+// power curve has zero velocity at one end, so a shot built on one comes to a dead stop either
+// just before its cut or just after it. Blended, the camera is never slower than ~0.35x its
+// average - it always reads as moving, even at the very edges of a clip.
+const SHOT_EASES = {
+  glide: (t) => 0.65 * t + 0.35 * Math.pow(t, 1.8),
+  ramp: (t) => 0.35 * t + 0.65 * Math.pow(t, 2.2),
+  settle: (t) => 0.55 * t + 0.45 * (1 - Math.pow(1 - t, 2)),
+};
+function easeShot(t, kind) { return (SHOT_EASES[kind] || SHOT_EASES.glide)(clamp01(t)); }
 
 function loadImageEl(src) {
   return new Promise((resolve, reject) => {
@@ -397,31 +409,148 @@ function safeShotAmplitude(camera, spec, homeZ, maxDisp, planeW, planeH) {
 
 // Renders one frame of a shot. `st` is { renderer, camera, scene, spec, s, homeZ, maxDisp }.
 function renderShotFrame(st, t) {
-  placeShotCamera(st.camera, st.spec, easeShot(t), st.s, st.homeZ, st.maxDisp);
+  placeShotCamera(st.camera, st.spec, easeShot(t, st.spec.ease), st.s, st.homeZ, st.maxDisp);
   st.renderer.render(st.scene, st.camera);
 }
 
-// Deterministic per-index shot SPEC (same seededRandom technique as kenBurnsParamsFor above, so
-// it never reshuffles on re-render). Clip length is now 2.6-3.5s rather than 5.2-6.8s: a real
-// listing video runs roughly 2.5-3s per shot, and at six seconds a move has nowhere left to go.
-function parallaxPathFor(index) {
-  const r1 = seededRandom(index * 17.31 + 2.4);
-  const r2 = seededRandom(index * 41.7 + 5.1);
-  const r3 = seededRandom(index * 9.13 + 7.7);
-  const cycle = ["pan", "orbit", "pan", "push", "pan", "reveal", "orbit", "pan"];
-  const type = index === 0 ? "push" : cycle[index % cycle.length];
-  // Target camera sweep per shot type (see shotSweepDeg). An orbit can carry a bit more than a
-  // pan because the target stays put, and a push is mostly forward travel rather than swing.
-  const sweepByType = { push: 6 + r3 * 3, pan: 11 + r2 * 4, orbit: 13 + r2 * 4, reveal: 9 + r3 * 4 };
-  return {
-    type,
-    axis: r3 > 0.32 ? "x" : "y", // mostly horizontal sweeps, like a real listing video
-    dirSign: r1 > 0.5 ? 1 : -1,
-    amp: 0.55,                   // deliberately unreachable: safeShotAmplitude finds the real ceiling
-    targetSweepDeg: sweepByType[type],
-    pushFrac: 0.6 + r3 * 0.4,
-    durationMs: 2600 + r2 * 900,
-  };
+// ---- The edit ---------------------------------------------------------------------------
+// Everything below decides the CUT rather than the camera: how long each shot runs, where the
+// cuts land, and what happens across them. A listing video reads as expensive mostly because of
+// this layer - the moves themselves are the easy part.
+
+const SHOW_BPM = 96;                      // calm but with a pulse; the tempo of most property films
+const BEAT_MS = 60000 / SHOW_BPM;         // 625ms
+const DISSOLVE_MS = 340;                  // short enough to feel like an edit, not a fade
+const SHOW_FADE_MS = 520;                 // up from black at the top, down at the tail
+const VIGNETTE = 0.26;                    // corner darkening; reads as "graded" rather than flat
+
+// Lays out the whole sequence at once. Doing it as one plan - rather than deriving each shot
+// independently the way parallaxPathFor used to - is what makes structure possible: an opening
+// that breathes, a middle with rhythm, a close that settles, and cuts that alternate direction
+// instead of drifting the same way eight times in a row.
+//
+// Every duration is a whole number of beats, so all cuts land on one grid. That is what "cut to
+// the beat" means, and it holds whether or not music is playing over it.
+function buildEditPlan(count) {
+  if (count === 0) return [];
+  const beats = (n) => Math.round(n * BEAT_MS);
+  const plan = [];
+
+  for (let i = 0; i < count; i++) {
+    const r = seededRandom(i * 17.31 + 2.4);
+    const isFirst = i === 0;
+    const isLast = i === count - 1 && count > 2;
+    let type, nBeats, sweep, pushFrac;
+
+    if (isFirst) {
+      // The establishing shot: slow push in, held longer than anything else. Lets the viewer
+      // read the whole frame before the edit starts moving.
+      type = "push"; nBeats = 6; sweep = 7; pushFrac = 0.95;
+    } else if (isLast) {
+      // Close on a pull back and rise - the standard "leave the room" move.
+      type = "reveal"; nBeats = 6; sweep = 10; pushFrac = 0.7;
+    } else {
+      const cycle = ["pan", "orbit", "pan", "push"];
+      type = cycle[(i - 1) % cycle.length];
+      nBeats = i % 2 ? 4 : 5;  // 2.5s / 3.1s alternating, so the rhythm never goes metronomic
+      sweep = type === "orbit" ? 14 : type === "pan" ? 12 : 7.5;
+      pushFrac = 0.6 + r * 0.4;
+    }
+
+    plan.push({
+      type,
+      // Mostly horizontal: a sweep across a room reads as looking around, a vertical one reads
+      // as a camera on a lift. Verticals are kept as occasional punctuation.
+      axis: type === "orbit" || i % 3 !== 2 ? "x" : "y",
+      dirSign: i % 2 === 0 ? 1 : -1, // strict alternation, so consecutive shots counter-move
+      amp: 0.55,                     // unreachable on purpose: safeShotAmplitude finds the real ceiling
+      targetSweepDeg: sweep,
+      pushFrac,
+      durationMs: beats(nBeats),
+    });
+  }
+
+  // Transitions. Mostly dissolves, with a hard cut every third shot for lift. The hard cut is
+  // what stops a sequence of dissolves from turning into a lullaby.
+  const lastIdx = count - 1;
+  const cuts = new Set();
+  for (let i = 3; i < count; i += 3) if (!(i === lastIdx && count > 2)) cuts.add(i);
+  // With only a handful of photos the every-third rule can land nothing at all, and an
+  // all-dissolve sequence goes soft. Put one hard cut near the middle in that case.
+  if (cuts.size === 0 && count >= 3) cuts.add(Math.max(1, Math.floor(count / 2)));
+  plan.forEach((p, i) => {
+    p.transition = cuts.has(i) ? "cut" : "dissolve";
+    p.transitionMs = cuts.has(i) ? 0 : DISSOLVE_MS;
+  });
+
+  // Speed curves follow from the cuts, not the other way round: accelerate into a hard cut,
+  // leave one already at speed. That pairing is the whole trick behind a "speed ramp".
+  plan.forEach((p, i) => {
+    const nextIsCut = i + 1 < plan.length && plan[i + 1].transition === "cut";
+    p.ease = nextIsCut ? "ramp" : p.transition === "cut" ? "settle" : "glide";
+  });
+
+  return plan;
+}
+
+// Vignette, cached per size - rebuilding the gradient every frame is wasted work.
+let _vigKey = "", _vigGrad = null;
+function vignetteFor(octx, W, H) {
+  const key = W + "x" + H;
+  if (key !== _vigKey) {
+    const g = octx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.34, W / 2, H / 2, Math.max(W, H) * 0.72);
+    g.addColorStop(0, "rgba(0,0,0,0)");
+    g.addColorStop(1, "rgba(0,0,0," + VIGNETTE + ")");
+    _vigKey = key; _vigGrad = g;
+  }
+  return _vigGrad;
+}
+
+// Composes ONE frame of the finished show onto a 2D context: the right shot at the right point
+// in its move, whatever the transition into it calls for, then the grade.
+//
+// Both the live preview and the exported file call this, so what is downloaded is frame for
+// frame what was on screen - they cannot drift apart.
+function composeShowFrame(octx, W, H, shots, tMs, drawShot, opts) {
+  const totalMs = shots.reduce((a, s) => a + s.spec.durationMs, 0);
+  const t = ((tMs % totalMs) + totalMs) % totalMs;
+
+  let acc = 0, idx = shots.length - 1;
+  for (let i = 0; i < shots.length; i++) {
+    if (t < acc + shots[i].spec.durationMs) { idx = i; break; }
+    acc += shots[i].spec.durationMs;
+  }
+  if (idx === shots.length - 1) acc = totalMs - shots[idx].spec.durationMs;
+
+  const shot = shots[idx];
+  const local = t - acc;
+  const fade = shot.spec.transitionMs || 0;
+
+  octx.globalAlpha = 1;
+  if (fade > 0 && local < fade && shots.length > 1) {
+    // Hold the outgoing shot underneath at its final frame and bring this one up over it.
+    const prev = shots[(idx - 1 + shots.length) % shots.length];
+    octx.drawImage(drawShot(prev, 1), 0, 0, W, H);
+    octx.globalAlpha = clamp01(local / fade);
+  }
+  octx.drawImage(drawShot(shot, local / shot.spec.durationMs), 0, 0, W, H);
+  octx.globalAlpha = 1;
+
+  octx.fillStyle = vignetteFor(octx, W, H);
+  octx.fillRect(0, 0, W, H);
+
+  // Up from black at the top and down at the tail. In the looping preview this reads as a
+  // deliberate top-and-tail rather than a seam.
+  let dark = 0;
+  if (t < SHOW_FADE_MS) dark = 1 - t / SHOW_FADE_MS;
+  else if (t > totalMs - SHOW_FADE_MS) dark = 1 - (totalMs - t) / SHOW_FADE_MS;
+  if (!opts || opts.fades !== false) {
+    if (dark > 0.001) {
+      octx.fillStyle = "rgba(0,0,0," + dark.toFixed(3) + ")";
+      octx.fillRect(0, 0, W, H);
+    }
+  }
+  return totalMs;
 }
 
 function Icon({ name, size = 16, className = "", style = {} }) {
@@ -586,31 +715,13 @@ function FlythroughStage({ stills, depths, specs, onError }) {
       return renderer.domElement;
     };
 
-    const total = () => shots.reduce((a, s) => a + s.spec.durationMs, 0);
-
     const start = () => {
       const t0 = performance.now();
       const tick = () => {
         if (disposed || !shots) return;
         raf = requestAnimationFrame(tick);
         if (!refit()) return;
-        const tMs = (performance.now() - t0) % total();
-        let acc = 0, idx = shots.length - 1;
-        for (let i = 0; i < shots.length; i++) {
-          if (tMs < acc + shots[i].spec.durationMs) { idx = i; break; }
-          acc += shots[i].spec.durationMs;
-        }
-        if (idx === shots.length - 1) acc = total() - shots[idx].spec.durationMs;
-        const local = tMs - acc;
-        octx.globalAlpha = 1;
-        if (local < EXPORT_FADE_MS) {
-          // Crossfade from the shot before this one - the last one when looping round.
-          const prev = shots[(idx - 1 + shots.length) % shots.length];
-          octx.drawImage(drawShot(prev, 1), 0, 0, W, H);
-          octx.globalAlpha = clamp01(local / EXPORT_FADE_MS);
-        }
-        octx.drawImage(drawShot(shots[idx], local / shots[idx].spec.durationMs), 0, 0, W, H);
-        octx.globalAlpha = 1;
+        composeShowFrame(octx, W, H, shots, performance.now() - t0, drawShot);
       };
       raf = requestAnimationFrame(tick);
     };
@@ -643,7 +754,6 @@ const EXPORT_FORMATS = {
   "16:9": { w: 1280, h: 720, label: "YouTube / boligsite" },
   "1:1": { w: 1000, h: 1000, label: "Instagram-feed" },
 };
-const EXPORT_FADE_MS = 420;
 
 function pickRecorderMime() {
   const candidates = [
@@ -701,7 +811,6 @@ async function exportFlythroughVideo({ stills, depths, specs, format, fps = 30, 
         homeZ: fit.homeZ,
         maxDisp: fit.maxDisp,
         s: safeShotAmplitude(camera, specs[i], fit.homeZ, fit.maxDisp, built.planeW, built.planeH),
-        durationMs: specs[i].durationMs,
       });
       if (onProgress) onProgress({ phase: "prepare", current: i + 1, total: stills.length });
     }
@@ -732,25 +841,8 @@ async function exportFlythroughVideo({ stills, depths, specs, format, fps = 30, 
     const t0 = performance.now();
     for (let f = 0; f < totalFrames; f++) {
       const tMs = (f / fps) * 1000;
-      let acc = 0;
-      let idx = shots.length - 1;
-      for (let i = 0; i < shots.length; i++) {
-        if (tMs < acc + shots[i].durationMs) { idx = i; break; }
-        acc += shots[i].durationMs;
-      }
-      if (idx === shots.length - 1) {
-        acc = shots.slice(0, idx).reduce((a, s) => a + s.durationMs, 0);
-      }
-      const shot = shots[idx];
-      const local = tMs - acc;
-      octx.globalAlpha = 1;
-      if (local < EXPORT_FADE_MS && idx > 0) {
-        const prev = shots[idx - 1];
-        octx.drawImage(drawShot(prev, 1), 0, 0, w, h);
-        octx.globalAlpha = clamp01(local / EXPORT_FADE_MS);
-      }
-      octx.drawImage(drawShot(shot, local / shot.durationMs), 0, 0, w, h);
-      octx.globalAlpha = 1;
+      // Same composer as the live preview, so the file is frame for frame what was on screen.
+      composeShowFrame(octx, w, h, shots, tMs, drawShot);
       if (manualFrames) track.requestFrame();
 
       if (f % 5 === 0 && onProgress) onProgress({ phase: "render", current: f + 1, total: totalFrames });
@@ -1069,9 +1161,9 @@ function Rundvis() {
   // Re-runs the whole thing (depth is cheap and local, so there's nothing to reuse).
   const regenerateFlythrough = () => runFlythrough();
 
+  // The whole edit - shot design, beat-aligned durations, transitions and speed curves.
   const flythroughParams = useMemo(
-    () => flythroughStills.map((_, i) => parallaxPathFor(i)),
-    // eslint-disable-next-line
+    () => buildEditPlan(flythroughStills.length),
     [flythroughStills.length]
   );
 
