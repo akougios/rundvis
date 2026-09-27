@@ -6,7 +6,6 @@
 <title>Rundvis — AI boligvideo prototype</title>
 <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
@@ -81,56 +80,86 @@ function applyKenBurns(el, params, t) {
   el.style.transform = `scale(${scale.toFixed(4)}) translate(${tx.toFixed(2)}%, ${ty.toFixed(2)}%)`;
 }
 
-// ---- Depth-based 3D parallax ("3D Ken Burns"): a deterministic, non-generative technique.
-// Instead of asking an AI video model to imagine camera motion (which can't be made to always
-// move the same reliable direction - see README history), we estimate a real per-pixel depth map
-// for each uploaded photo directly in the browser (no server, no per-generation AI cost, no
-// randomness) and move a virtual camera through the resulting 3D mesh along a fixed, chosen path.
-// The same photo always produces the exact same depth map and therefore the exact same move.
+// ---- Cinematic 2D motion --------------------------------------------------------------------
+// The camera moves the FRAME, never the pixels. Each shot is a rectangle travelling across the
+// photograph; every output pixel is a straight resample of the original, so straight lines stay
+// straight and nothing bends, tears or shimmers.
+//
+// This replaced a depth-estimated 3D mesh. That approach displaces every pixel by an ESTIMATED
+// depth, and the estimate is never perfect: ceiling boards that are straight in the photo came
+// out curved, and hard depth edges either tore or stretched. No amount of tuning fixes that -
+// bending the photo is what the technique does. Fidelity to the uploaded photo was the higher
+// requirement, so the depth model, the mesh and Three.js are gone.
+//
+// The trade is parallax. In exchange: nothing to go wrong, no model to download, no waiting, and
+// a far smaller crop (about 4-10% here against the 22% the 3D camera needed for room to turn).
 
-// Runs a dynamic import() from inside a Babel-transformed script without Babel's parser ever
-// seeing the `import(...)` token (which the default Babel-standalone preset can't parse) - the
-// browser's own engine parses the string body of the Function constructor at call time instead.
-const dynamicImport = (url) => new Function("u", "return import(u)")(url);
-
-let depthEstimatorPromise = null;
-function getDepthEstimator() {
-  if (!depthEstimatorPromise) {
-    depthEstimatorPromise = dynamicImport("https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.5")
-      .then((mod) => mod.pipeline("depth-estimation", "onnx-community/depth-anything-v2-small", { dtype: "q8" }));
-  }
-  return depthEstimatorPromise;
-}
-
-// Estimates depth for a single data-URL photo and returns a same-size grayscale
-// canvas (bright = near the camera, dark = far).
-async function estimateDepthCanvas(dataUrl) {
-  const estimator = await getDepthEstimator();
-  const output = await estimator(dataUrl);
-  return output.depth.toCanvas();
-}
-
-// ---- Shared parallax engine -------------------------------------------------------------
-// Everything below is used by BOTH the live preview (FlythroughStage) and the file export
-// (exportFlythroughVideo), so the downloaded video is frame-for-frame what was previewed.
-
-const PX_FOV = 70;        // wide, like the 16-24mm lenses listing photos are actually shot on.
-                          // At the old 50 degrees a translating camera barely changes perspective.
-const PX_SAFETY = 1.28;   // how much closer than "exactly covering the photo" the camera sits.
-                          // This crop is what buys room to move at all - with no margin the
-                          // camera can only ever slide along one axis.
-const PX_MAX_DISP = 0.28; // depth displacement, in plane-height units. With PX_SAFETY this puts
-                          // the far surface roughly twice as far from the camera as the near one,
-                          // so foreground and background genuinely separate. (The old values gave
-                          // a far/near ratio of about 1.19 - i.e. almost none.)
-const PX_MAX_STEP = 0.07;  // max normalised depth change per vertex pair (see limitDepthGradient).
-                           // Measured on a synthetic wall/window edge: this turns a hard jump into
-                           // a ramp ~3.8% of the image wide. Tighter (0.03) spreads it over 6.6%
-                           // and starts flattening the room; looser (0.10) narrows it to 2.4% and
-                           // the stretching becomes visible again.
-const PX_NEAR_DISP = 0.30; // disparity floor for the 1/x depth conversion (see buildParallaxScene)
+const KB_MAX_ZOOM = 1.1;   // tightest any shot ever frames: a 10% crop, and only at one end of a move
+const KB_TRAVEL = 0.9;     // fraction of the available slack a full move uses
 
 function clamp01(t) { return Math.max(0, Math.min(1, t)); }
+function clampU(u) { return Math.max(-1, Math.min(1, u)); }
+
+// The largest rectangle of the output's shape that fits inside the image. Whatever slack is left
+// over - the mismatch between the photo's shape and the video's - is free room to move through,
+// costing no crop at all. A 3:2 photo in a 16:9 frame has ~16% of vertical slack before any zoom.
+function coverRect(iw, ih, outAspect) {
+  return iw / ih > outAspect
+    ? { w: ih * outAspect, h: ih }
+    : { w: iw, h: iw / outAspect };
+}
+
+// Prescales the photo so the most tightly framed moment of a shot lands near 1:1 on the output.
+// Drawing every frame from this plate keeps the picture crisp: the browser is then resampling by
+// a hair rather than squeezing a 2560px photo into a 1080px frame sixty times a second.
+// Downscaling is done in halving steps, which is much cleaner than one big jump.
+function buildPlate(img, outW, outH) {
+  const base = coverRect(img.width, img.height, outW / outH);
+  const scale = Math.min(1, (outW * KB_MAX_ZOOM) / base.w);
+  let src = img, sw = img.width, sh = img.height;
+  const targetW = Math.max(16, Math.round(img.width * scale));
+  const targetH = Math.max(16, Math.round(img.height * scale));
+  while (sw / 2 >= targetW && sh / 2 >= targetH && sw > 32) {
+    const c = document.createElement("canvas");
+    c.width = Math.round(sw / 2); c.height = Math.round(sh / 2);
+    const cx = c.getContext("2d");
+    cx.imageSmoothingEnabled = true; cx.imageSmoothingQuality = "high";
+    cx.drawImage(src, 0, 0, c.width, c.height);
+    src = c; sw = c.width; sh = c.height;
+  }
+  if (sw === targetW && sh === targetH) return { canvas: src, w: sw, h: sh };
+  const out = document.createElement("canvas");
+  out.width = targetW; out.height = targetH;
+  const octx = out.getContext("2d");
+  octx.imageSmoothingEnabled = true; octx.imageSmoothingQuality = "high";
+  octx.drawImage(src, 0, 0, targetW, targetH);
+  return { canvas: out, w: targetW, h: targetH };
+}
+
+// Where a shot's frame sits at time t. Returned in the plate's pixel coordinates.
+// By construction the rectangle can never leave the photo: its half-width plus the largest
+// possible offset is exactly the plate's half-width. That is the whole black-edge guarantee -
+// no projection maths, no search, nothing to get wrong.
+function shotRectAt(spec, plateW, plateH, outAspect, t) {
+  const e = easeShot(t, spec.ease);
+  const z = spec.zFrom + (spec.zTo - spec.zFrom) * e;
+  const base = coverRect(plateW, plateH, outAspect);
+  const rw = base.w / z, rh = base.h / z;
+  const slackX = Math.max(0, plateW - rw), slackY = Math.max(0, plateH - rh);
+  const ux = clampU(spec.fromU.x + (spec.toU.x - spec.fromU.x) * e);
+  const uy = clampU(spec.fromU.y + (spec.toU.y - spec.fromU.y) * e);
+  return {
+    x: plateW / 2 + (ux * slackX) / 2 - rw / 2,
+    y: plateH / 2 + (uy * slackY) / 2 - rh / 2,
+    w: rw,
+    h: rh,
+  };
+}
+
+function drawShot2D(octx, W, H, shot, t) {
+  const r = shotRectAt(shot.spec, shot.plate.w, shot.plate.h, W / H, t);
+  octx.drawImage(shot.plate.canvas, r.x, r.y, r.w, r.h, 0, 0, W, H);
+}
 
 // Three speed curves, picked per shot by where its cut falls (see buildEditPlan). None of them
 // decelerate to a standstill: a clip that parks before the cut is the single clearest giveaway
@@ -158,281 +187,6 @@ function loadImageEl(src) {
   });
 }
 
-// Samples the depth map with a 3x3 median. Unlike a blur this removes the model's speckle
-// WITHOUT rounding off depth edges, which is what keeps doorframes and furniture edges crisp
-// instead of melting them into the wall behind.
-function makeDepthSampler(depthCanvas) {
-  const w = depthCanvas.width, h = depthCanvas.height;
-  const raw = depthCanvas.getContext("2d").getImageData(0, 0, w, h).data;
-  const d = new Float32Array(w * h);
-  for (let i = 0; i < w * h; i++) d[i] = raw[i * 4] / 255;
-  const win = new Float32Array(9);
-  return function sample(u, v) {
-    const x = Math.min(w - 1, Math.max(0, Math.round(u * (w - 1))));
-    const y = Math.min(h - 1, Math.max(0, Math.round(v * (h - 1))));
-    let n = 0;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        const px = Math.min(w - 1, Math.max(0, x + dx));
-        const py = Math.min(h - 1, Math.max(0, y + dy));
-        win[n++] = d[py * w + px];
-      }
-    }
-    for (let i = 0; i < 5; i++) {
-      let m = i;
-      for (let j = i + 1; j < 9; j++) if (win[j] < win[m]) m = j;
-      const tmp = win[i]; win[i] = win[m]; win[m] = tmp;
-    }
-    return win[4];
-  };
-}
-
-// Caps how fast depth may change from one vertex to the next, by repeatedly pulling apart
-// neighbours that differ by more than maxStep.
-//
-// This replaces cutting the mesh open at depth edges. A photo has no geometry hiding behind its
-// foreground, so a hard depth edge leaves the renderer two bad options: stretch the texture
-// across the gap (rubbery), or open a hole (torn, and whatever sits behind shows through as
-// bright ragged fringes - the "flimmer" around window and rug edges).
-//
-// Bounding the gradient removes the choice. A wall-to-window jump becomes a steep ramp a few
-// percent of the image wide instead of a cliff, so there is nothing to tear along and nothing
-// to stretch violently. The eye reads the ramp as ordinary perspective.
-function limitDepthGradient(z, cols, rows, maxStep, iterations) {
-  for (let it = 0; it < iterations; it++) {
-    let worst = 0;
-    for (let y = 0; y < rows; y++) {
-      const row = y * cols;
-      for (let x = 0; x < cols - 1; x++) {
-        const i = row + x, j = i + 1;
-        const d = z[j] - z[i];
-        const over = Math.abs(d) - maxStep;
-        if (over > 0) { const e = over * 0.5 * (d > 0 ? 1 : -1); z[i] += e; z[j] -= e; if (over > worst) worst = over; }
-      }
-    }
-    for (let y = 0; y < rows - 1; y++) {
-      for (let x = 0; x < cols; x++) {
-        const i = y * cols + x, j = i + cols;
-        const d = z[j] - z[i];
-        const over = Math.abs(d) - maxStep;
-        if (over > 0) { const e = over * 0.5 * (d > 0 ? 1 : -1); z[i] += e; z[j] -= e; if (over > worst) worst = over; }
-      }
-    }
-    if (worst < maxStep * 0.02) break; // converged; the remaining passes would do nothing
-  }
-}
-
-// Set once from the first renderer created, so textures can use the GPU's real anisotropy limit.
-let PX_MAX_ANISO = 4;
-
-// Builds the scene for one photo. Geometry Z is normalised to [-1, 0] (0 = nearest), so the
-// actual depth scale is applied later as mesh.scale.z - that means a viewport resize never has
-// to rebuild the mesh. `img` is the FULL-resolution photo: depth is estimated from a small copy,
-// but the texture the viewer actually looks at is never downscaled to match it.
-function buildParallaxScene(img, depthCanvas, segments) {
-  const aspect = img.width / img.height;
-  const planeH = 1, planeW = aspect;
-  const geo = new THREE.PlaneGeometry(planeW, planeH, segments, segments);
-  const pos = geo.attributes.position;
-  const sample = makeDepthSampler(depthCanvas);
-  const N = pos.count;
-  const metric = new Float32Array(N);
-
-  // Depth Anything outputs RELATIVE INVERSE depth (disparity), normalised 0..1. Using that
-  // straight as a Z offset - as the previous version did - squashes the whole room into a thin
-  // slab just behind the image plane. Running it back through 1/x restores the real spacing.
-  for (let i = 0; i < N; i++) {
-    const u = pos.getX(i) / planeW + 0.5;
-    const v = 1 - (pos.getY(i) / planeH + 0.5);
-    const disp = PX_NEAR_DISP + (1 - PX_NEAR_DISP) * clamp01(sample(u, v));
-    metric[i] = 1 / disp;
-  }
-
-  // Percentile range, so one stray pixel (a window blowing out to "infinitely far") can't
-  // flatten everything else.
-  const sorted = Array.prototype.slice.call(metric).sort((a, b) => a - b);
-  const lo = sorted[Math.floor(N * 0.02)];
-  const hi = sorted[Math.floor(N * 0.98)];
-  const span = Math.max(1e-4, hi - lo);
-  const zn = new Float32Array(N);
-  for (let i = 0; i < N; i++) {
-    const m = Math.min(hi, Math.max(lo, metric[i]));
-    zn[i] = -((m - lo) / span); // 0 = nearest, -1 = farthest
-  }
-
-  // The mesh stays whole; only its steepness is bounded. PX_MAX_STEP is per vertex pair, so the
-  // ramp a full-range jump spreads over is about 1/PX_MAX_STEP vertices - roughly 8% of the
-  // frame at the segment counts used here.
-  limitDepthGradient(zn, segments + 1, segments + 1, PX_MAX_STEP, 120);
-  for (let i = 0; i < N; i++) pos.setZ(i, zn[i]);
-  pos.needsUpdate = true;
-  geo.computeVertexNormals();
-
-  // The texture is the photo at full resolution - this is what the viewer actually looks at, and
-  // it must never be limited by whatever size the depth model needed.
-  const tex = new THREE.Texture(img);
-  tex.needsUpdate = true;
-  if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
-  tex.generateMipmaps = true;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.anisotropy = PX_MAX_ANISO; // keeps detail sharp where the plane is seen at an angle
-  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex }));
-
-  const scene = new THREE.Scene();
-  scene.add(mesh);
-  return { scene, mesh, plate: null, planeW, planeH };
-}
-
-function disposeParallaxScene(built) {
-  if (!built) return;
-  [built.mesh, built.plate].forEach((m) => {
-    if (!m) return;
-    if (m.geometry) m.geometry.dispose();
-    if (m.material) {
-      if (m.material.map) m.material.map.dispose();
-      m.material.dispose();
-    }
-  });
-}
-
-// Works out, for the CURRENT viewport shape, how far back the camera sits and how deep the
-// scene is allowed to be. Depends only on the frame's aspect ratio, so a resize is cheap.
-function fitParallaxCamera(planeW, planeH, frameAspect) {
-  const halfT = Math.tan((PX_FOV * Math.PI) / 180 / 2);
-  const dCover = Math.min(planeH / (2 * halfT), planeW / (2 * halfT * frameAspect));
-  const camDistFar = dCover / PX_SAFETY;
-  let maxDisp = PX_MAX_DISP;
-  let homeZ = camDistFar - maxDisp;
-  if (homeZ < 0.18) {
-    maxDisp = Math.max(0.08, camDistFar - 0.18);
-    homeZ = camDistFar - maxDisp;
-  }
-  return { homeZ, maxDisp };
-}
-
-// True when all four frustum corners land inside the photo at its FAR depth - the worst case,
-// since receding geometry pulls inward on screen. Unlike the previous "just don't rotate the
-// camera" rule, this permits any camera orientation and simply checks the result, which is what
-// makes real panning and orbiting possible again.
-function frustumCoversPhoto(camera, planeW, planeH, farZ) {
-  const hw = planeW / 2, hh = planeH / 2;
-  const v = new THREE.Vector3();
-  for (let i = 0; i < 4; i++) {
-    const nx = i === 0 || i === 3 ? -1 : 1;
-    const ny = i < 2 ? -1 : 1;
-    v.set(nx, ny, 0.5).unproject(camera);
-    const dz = v.z - camera.position.z;
-    if (dz >= -1e-6) return false;
-    const t = (farZ - camera.position.z) / dz;
-    if (t <= 0) return false;
-    const px = camera.position.x + (v.x - camera.position.x) * t;
-    const py = camera.position.y + (v.y - camera.position.y) * t;
-    if (px < -hw || px > hw || py < -hh || py > hh) return false;
-  }
-  return true;
-}
-
-// The camera path for one shot at time t, with every lateral offset scaled by s (see
-// safeShotAmplitude). Each shot aims at a TARGET point as well as moving, so the camera
-// actually turns - that rotation is what makes it feel like looking around a room rather
-// than sliding a photo sideways.
-function shotCameraAt(spec, t, s, homeZ, maxDisp) {
-  const d = spec.dirSign;
-  const u = -1 + 2 * t;
-  const a = spec.amp;
-  const pos = { x: 0, y: 0, z: homeZ };
-  const tgt = { x: 0, y: 0, z: -maxDisp * 0.55 };
-  if (spec.type === "pan") {
-    // Camera slides one way while the target slides the other: a sweeping look across the room.
-    if (spec.axis === "x") {
-      pos.x = d * a * u * s;
-      pos.y = d * a * 0.16 * u * s;
-      tgt.x = -d * a * 0.7 * u * s;
-    } else {
-      pos.y = d * a * u * s;
-      pos.x = -d * a * 0.18 * u * s;
-      tgt.y = -d * a * 0.65 * u * s;
-    }
-    pos.z = homeZ * (1 - 0.14 * t);
-  } else if (spec.type === "orbit") {
-    // Camera arcs sideways and dips in at the midpoint while the target stays put, so the
-    // foreground swings across the background.
-    pos.x = d * a * u * s;
-    pos.y = d * a * 0.3 * Math.sin(Math.PI * t) * s;
-    pos.z = homeZ * (1 - 0.2 * Math.sin(Math.PI * t));
-  } else if (spec.type === "reveal") {
-    // Starts in close and low, pulls back and rises - the standard "open on the room" move.
-    pos.y = d * a * (-0.75 + 1.5 * t) * s;
-    pos.x = -d * a * 0.3 * u * s;
-    pos.z = homeZ * (0.66 + 0.34 * t);
-    tgt.y = -d * a * 0.45 * (1 - 2 * t) * s;
-  } else {
-    pos.x = d * a * 0.35 * u * s;
-    pos.y = -d * a * 0.25 * u * s;
-    pos.z = homeZ * (1 - spec.pushFrac * 0.42 * t);
-    tgt.x = -d * a * 0.25 * u * s;
-  }
-  return { pos, tgt };
-}
-
-function placeShotCamera(camera, spec, t, s, homeZ, maxDisp) {
-  const { pos, tgt } = shotCameraAt(spec, t, s, homeZ, maxDisp);
-  camera.position.set(pos.x, pos.y, pos.z);
-  camera.up.set(0, 1, 0);
-  camera.lookAt(tgt.x, tgt.y, tgt.z);
-  camera.updateMatrixWorld();
-}
-
-// How far the camera swings around the scene over a whole shot, in degrees. This is the number
-// that actually decides whether a move reads as "walking through the room" or as a broken
-// effect: from a single photo there is only ~2x of real depth and nothing at all behind the
-// foreground, so past roughly 15-20 degrees the missing geometry becomes obvious.
-function shotSweepDeg(spec, s, homeZ, maxDisp) {
-  const a = shotCameraAt(spec, 0, s, homeZ, maxDisp).pos;
-  const b = shotCameraAt(spec, 1, s, homeZ, maxDisp).pos;
-  const d = Math.hypot(b.x - a.x, b.y - a.y);
-  return (2 * Math.atan(d / 2 / homeZ) * 180) / Math.PI;
-}
-
-// Finds the move for one shot: first the largest amplitude that never shows past the photo's
-// edge (s = 0 is always safe, so this always terminates), then scaled down to the shot's target
-// camera sweep if there is more headroom than that. So the photo's own shape sets the ceiling
-// and the shot design sets the intent - rather than a fixed fraction that was either too timid
-// on a generous photo or clipped to nothing on a tight one.
-function safeShotAmplitude(camera, spec, homeZ, maxDisp, planeW, planeH) {
-  const farZ = -maxDisp;
-  const ok = (s) => {
-    for (let i = 0; i <= 20; i++) {
-      placeShotCamera(camera, spec, i / 20, s, homeZ, maxDisp);
-      if (!frustumCoversPhoto(camera, planeW, planeH, farZ)) return false;
-    }
-    return true;
-  };
-  let ceiling;
-  if (ok(1)) {
-    ceiling = 1;
-  } else {
-    let lo = 0, hi = 1;
-    for (let i = 0; i < 14; i++) {
-      const mid = (lo + hi) / 2;
-      if (ok(mid)) lo = mid; else hi = mid;
-    }
-    ceiling = lo;
-  }
-  const sweep = shotSweepDeg(spec, ceiling, homeZ, maxDisp);
-  if (sweep > spec.targetSweepDeg && sweep > 0.01) {
-    return ceiling * (spec.targetSweepDeg / sweep);
-  }
-  return ceiling;
-}
-
-// Renders one frame of a shot. `st` is { renderer, camera, scene, spec, s, homeZ, maxDisp }.
-function renderShotFrame(st, t) {
-  placeShotCamera(st.camera, st.spec, easeShot(t, st.spec.ease), st.s, st.homeZ, st.maxDisp);
-  st.renderer.render(st.scene, st.camera);
-}
-
 // ---- The edit ---------------------------------------------------------------------------
 // Everything below decides the CUT rather than the camera: how long each shot runs, where the
 // cuts land, and what happens across them. A listing video reads as expensive mostly because of
@@ -456,38 +210,48 @@ function buildEditPlan(count) {
   const beats = (n) => Math.round(n * BEAT_MS);
   const plan = [];
 
+  const T = KB_TRAVEL;
   for (let i = 0; i < count; i++) {
-    const r = seededRandom(i * 17.31 + 2.4);
     const isFirst = i === 0;
     const isLast = i === count - 1 && count > 2;
-    let type, nBeats, sweep, pushFrac;
+    const d = i % 2 === 0 ? 1 : -1; // strict alternation, so consecutive shots counter-move
+    let type, nBeats, zFrom, zTo, fromU, toU;
 
     if (isFirst) {
-      // The establishing shot: slow push in, held longer than anything else. Lets the viewer
-      // read the whole frame before the edit starts moving.
-      type = "push"; nBeats = 6; sweep = 7; pushFrac = 0.95;
+      // Establishing shot: opens on the FULL frame - no crop at all - and eases in. The first
+      // thing the viewer sees is the photograph exactly as the agent shot it.
+      type = "push"; nBeats = 6;
+      zFrom = 1.0; zTo = 1.07;
+      fromU = { x: 0, y: 0 }; toU = { x: 0.18, y: -0.12 };
     } else if (isLast) {
-      // Close on a pull back and rise - the standard "leave the room" move.
-      type = "reveal"; nBeats = 6; sweep = 10; pushFrac = 0.7;
+      // Close by pulling back out to the full frame again, rising slightly: the standard
+      // "leave the room" move, and it ends on an uncropped picture.
+      type = "pull"; nBeats = 6;
+      zFrom = 1.08; zTo = 1.0;
+      fromU = { x: -0.2 * d, y: 0.45 }; toU = { x: 0, y: -0.1 };
     } else {
-      const cycle = ["pan", "orbit", "pan", "push"];
+      // THREE types, not four. Direction alternates with i, so a cycle of even length would
+      // land every pan on the same parity - and therefore give every pan the same direction.
+      // An odd-length cycle makes each type alternate properly from one appearance to the next.
+      const cycle = ["pan", "drift", "push"];
       type = cycle[(i - 1) % cycle.length];
-      nBeats = i % 2 ? 4 : 5;  // 2.5s / 3.1s alternating, so the rhythm never goes metronomic
-      sweep = type === "orbit" ? 14 : type === "pan" ? 12 : 7.5;
-      pushFrac = 0.6 + r * 0.4;
+      nBeats = i % 2 ? 4 : 5; // 2.5s / 3.1s alternating, so the rhythm never goes metronomic
+      if (type === "pan") {
+        // A travelling frame at a fixed crop. Both axes are driven; because each is scaled by
+        // its OWN slack, the move naturally runs along whichever axis the photo actually has
+        // room in - wide for a 9:16 frame, tall for a 16:9 one - with no special-casing.
+        zFrom = 1.06; zTo = 1.06;
+        fromU = { x: -T * d, y: T * 0.25 * d }; toU = { x: T * d, y: -T * 0.25 * d };
+      } else if (type === "drift") {
+        zFrom = 1.02; zTo = 1.09;
+        fromU = { x: -T * 0.55 * d, y: -T * 0.5 * d }; toU = { x: T * 0.55 * d, y: T * 0.5 * d };
+      } else {
+        zFrom = 1.01; zTo = 1.08;
+        fromU = { x: T * 0.3 * d, y: T * 0.25 * d }; toU = { x: -T * 0.3 * d, y: -T * 0.25 * d };
+      }
     }
 
-    plan.push({
-      type,
-      // Mostly horizontal: a sweep across a room reads as looking around, a vertical one reads
-      // as a camera on a lift. Verticals are kept as occasional punctuation.
-      axis: type === "orbit" || i % 3 !== 2 ? "x" : "y",
-      dirSign: i % 2 === 0 ? 1 : -1, // strict alternation, so consecutive shots counter-move
-      amp: 0.55,                     // unreachable on purpose: safeShotAmplitude finds the real ceiling
-      targetSweepDeg: sweep,
-      pushFrac,
-      durationMs: beats(nBeats),
-    });
+    plan.push({ type, dirSign: d, zFrom, zTo, fromU, toU, durationMs: beats(nBeats) });
   }
 
   // Transitions. Mostly dissolves, with a hard cut every third shot for lift. The hard cut is
@@ -531,7 +295,7 @@ function vignetteFor(octx, W, H) {
 //
 // Both the live preview and the exported file call this, so what is downloaded is frame for
 // frame what was on screen - they cannot drift apart.
-function composeShowFrame(octx, W, H, shots, tMs, drawShot, opts) {
+function composeShowFrame(octx, W, H, shots, tMs, opts) {
   const totalMs = shots.reduce((a, s) => a + s.spec.durationMs, 0);
   const t = ((tMs % totalMs) + totalMs) % totalMs;
 
@@ -550,10 +314,10 @@ function composeShowFrame(octx, W, H, shots, tMs, drawShot, opts) {
   if (fade > 0 && local < fade && shots.length > 1) {
     // Hold the outgoing shot underneath at its final frame and bring this one up over it.
     const prev = shots[(idx - 1 + shots.length) % shots.length];
-    octx.drawImage(drawShot(prev, 1), 0, 0, W, H);
+    drawShot2D(octx, W, H, prev, 1);
     octx.globalAlpha = clamp01(local / fade);
   }
-  octx.drawImage(drawShot(shot, local / shot.spec.durationMs), 0, 0, W, H);
+  drawShot2D(octx, W, H, shot, local / shot.spec.durationMs);
   octx.globalAlpha = 1;
 
   octx.fillStyle = vignetteFor(octx, W, H);
@@ -651,23 +415,22 @@ function SceneLayer({ src, active, isPlaying, getProgress, kbParams, fadeMs }) {
   );
 }
 
-// The whole walkthrough on ONE canvas. Every shot's scene is built up front and then played
-// from a single renderer, which is what keeps the cut between two shots clean.
+// The whole walkthrough on ONE canvas. Each photo is prescaled once to a plate sized for the
+// current output (see buildPlate) and then played back by moving a rectangle across it.
 //
-// The previous design mounted one WebGL layer per shot and swapped them. Because each layer
-// rebuilt its scene when its src prop changed, BOTH the outgoing and the incoming layer were
-// rebuilding at the same moment, and neither drew anything while they did - a full black frame
-// at every cut. Here nothing is rebuilt during playback at all.
+// Nothing is rebuilt during playback, which is what keeps the cuts clean: an earlier design gave
+// every shot its own layer, and because each layer rebuilt when its source changed, the outgoing
+// and incoming shots rebuilt at the same instant and neither drew anything - a black frame at
+// every cut.
 //
-// Composition mirrors exportFlythroughVideo exactly: render the shot in WebGL, blit it onto a
-// 2D canvas, and crossfade by drawing the outgoing shot underneath at a falling alpha. Preview
-// and export therefore run the same code and cannot drift apart.
-function FlythroughStage({ stills, depths, specs, onError }) {
+// Composition goes through composeShowFrame, the same function the exporter uses, so the file
+// that is downloaded is frame for frame what was on screen.
+function FlythroughStage({ stills, specs, onError }) {
   const hostRef = useRef(null);
 
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || typeof THREE === "undefined" || stills.length === 0) return;
+    if (!host || stills.length === 0) return;
     let disposed = false;
     let raf = 0;
 
@@ -676,21 +439,19 @@ function FlythroughStage({ stills, depths, specs, onError }) {
     out.style.height = "100%";
     out.style.display = "block";
     const octx = out.getContext("2d");
+    octx.imageSmoothingEnabled = true;
+    octx.imageSmoothingQuality = "high";
     host.innerHTML = "";
     host.appendChild(out);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
-    renderer.setPixelRatio(1);
-    try { PX_MAX_ANISO = Math.max(PX_MAX_ANISO, renderer.capabilities.getMaxAnisotropy()); } catch (e) {}
-    const camera = new THREE.PerspectiveCamera(PX_FOV, 1, 0.02, 20);
-
-    let shots = null;
-    let dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let images = null;   // decoded photos, full size
+    let shots = null;    // { plate, spec } per shot, plates sized for the CURRENT canvas
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     let W = 0, H = 0;
 
-    // Re-derives everything that depends on the container's CURRENT size. Reading the size here
+    // Rebuilds the plates whenever the canvas size changes materially. Reading the size here
     // rather than once at mount is what stops a late stylesheet or a rotated phone from leaving
-    // a canvas that doesn't match its box - the cause of the black bars reported on mobile.
+    // a canvas that does not match its box - the cause of the black bars reported on mobile.
     const refit = () => {
       if (disposed) return false;
       const cw = host.clientWidth, ch = host.clientHeight;
@@ -700,53 +461,33 @@ function FlythroughStage({ stills, depths, specs, onError }) {
       W = nw; H = nh;
       out.width = W;
       out.height = H;
-      renderer.setSize(W, H, false);
-      camera.aspect = W / H;
-      camera.updateProjectionMatrix();
-      if (shots) {
-        for (const s of shots) {
-          const fit = fitParallaxCamera(s.built.planeW, s.built.planeH, W / H);
-          s.built.mesh.scale.z = fit.maxDisp;
-          s.homeZ = fit.homeZ;
-          s.maxDisp = fit.maxDisp;
-          s.s = safeShotAmplitude(camera, s.spec, fit.homeZ, fit.maxDisp, s.built.planeW, s.built.planeH);
-        }
-      }
+      octx.imageSmoothingEnabled = true;
+      octx.imageSmoothingQuality = "high";
+      if (images) shots = images.map((img, i) => ({ plate: buildPlate(img, W, H), spec: specs[i] }));
       return true;
     };
 
     const build = async () => {
-      const built = [];
+      const loaded = [];
       for (let i = 0; i < stills.length; i++) {
         const img = await loadImageEl(stills[i]);
         if (disposed) return;
-        const segments = window.innerWidth < 520 ? 192 : 288;
-        built.push({ built: buildParallaxScene(img, depths[i], segments), spec: specs[i], homeZ: 1, maxDisp: 0.2, s: 0 });
+        loaded.push(img);
       }
-      if (disposed) return;
-      shots = built;
-      W = H = 0; // force refit to fit every freshly built scene
+      images = loaded;
+      W = H = 0; // force a refit so the plates are built for the real canvas size
       refit();
-      start();
-    };
-
-    const drawShot = (shot, t) => {
-      renderShotFrame({ renderer, camera, scene: shot.built.scene, spec: shot.spec, s: shot.s, homeZ: shot.homeZ, maxDisp: shot.maxDisp }, t);
-      return renderer.domElement;
-    };
-
-    const start = () => {
       const t0 = performance.now();
       const tick = () => {
-        if (disposed || !shots) return;
+        if (disposed) return;
         raf = requestAnimationFrame(tick);
-        if (!refit()) return;
-        composeShowFrame(octx, W, H, shots, performance.now() - t0, drawShot);
+        if (!refit() || !shots) return;
+        composeShowFrame(octx, W, H, shots, performance.now() - t0);
       };
       raf = requestAnimationFrame(tick);
     };
 
-    build().catch((e) => { if (!disposed && onError) onError(e.message || "Kunne ikke bygge 3D-scenen."); });
+    build().catch((e) => { if (!disposed && onError) onError(e.message || "Kunne ikke indlæse billederne."); });
 
     const ro = new ResizeObserver(() => refit());
     ro.observe(host);
@@ -755,12 +496,12 @@ function FlythroughStage({ stills, depths, specs, onError }) {
       disposed = true;
       cancelAnimationFrame(raf);
       ro.disconnect();
-      if (shots) shots.forEach((s) => disposeParallaxScene(s.built));
-      renderer.dispose();
+      images = null;
+      shots = null;
       host.innerHTML = "";
     };
     // eslint-disable-next-line
-  }, [stills, depths, specs]);
+  }, [stills, specs]);
 
   return <div ref={hostRef} className="absolute inset-0 w-full h-full" />;
 }
@@ -794,7 +535,7 @@ const HIDDEN_TAB_MSG =
   "Optagelsen kræver at denne fane er fremme. Browseren sætter canvas-optagelse på pause i en " +
   "baggrundsfane, og filen bliver tom. Lad fanen være synlig, og prøv igen.";
 
-async function exportFlythroughVideo({ stills, depths, specs, format, fps = 30, onProgress }) {
+async function exportFlythroughVideo({ stills, specs, format, fps = 30, onProgress }) {
   if (!window.MediaRecorder) throw new Error("Din browser understøtter ikke videooptagelse. Prøv Chrome eller Safari 17+.");
   const mime = pickRecorderMime();
   if (!mime) throw new Error("Din browser kan ikke optage video fra et canvas.");
@@ -804,48 +545,28 @@ async function exportFlythroughVideo({ stills, depths, specs, format, fps = 30, 
   if (document.hidden) throw new Error(HIDDEN_TAB_MSG);
   const fmt = EXPORT_FORMATS[format];
   const w = fmt.w, h = fmt.h;
-  const frameAspect = w / h;
 
-  // The recorded surface is a plain 2D canvas: each shot is rendered in WebGL and copied onto
-  // it, which is what makes a real crossfade between two shots possible.
   const out = document.createElement("canvas");
   out.width = w;
   out.height = h;
   const octx = out.getContext("2d");
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = "high";
   octx.fillStyle = "#000";
   octx.fillRect(0, 0, w, h);
 
-  // preserveDrawingBuffer is required, otherwise drawImage reads an already-cleared buffer.
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
-  renderer.setPixelRatio(1);
-  try { PX_MAX_ANISO = Math.max(PX_MAX_ANISO, renderer.capabilities.getMaxAnisotropy()); } catch (e) {}
-  renderer.setSize(w, h, false);
-  const camera = new THREE.PerspectiveCamera(PX_FOV, frameAspect, 0.02, 20);
-
   const shots = [];
-  const cleanup = () => {
-    shots.forEach((s) => disposeParallaxScene(s.built));
-    renderer.dispose();
-  };
+  const cleanup = () => { shots.length = 0; };
 
   try {
-    // Build every shot up front so no frame stalls on image decoding mid-recording.
+    // Plates are built up front, at this format's size, so no frame stalls mid-recording.
     for (let i = 0; i < stills.length; i++) {
       const img = await loadImageEl(stills[i]);
-      const built = buildParallaxScene(img, depths[i], 288);
-      const fit = fitParallaxCamera(built.planeW, built.planeH, frameAspect);
-      built.mesh.scale.z = fit.maxDisp;
-      shots.push({
-        built,
-        spec: specs[i],
-        homeZ: fit.homeZ,
-        maxDisp: fit.maxDisp,
-        s: safeShotAmplitude(camera, specs[i], fit.homeZ, fit.maxDisp, built.planeW, built.planeH),
-      });
+      shots.push({ plate: buildPlate(img, w, h), spec: specs[i] });
       if (onProgress) onProgress({ phase: "prepare", current: i + 1, total: stills.length });
     }
 
-    const totalMs = shots.reduce((a, s) => a + s.durationMs, 0);
+    const totalMs = shots.reduce((a, s) => a + s.spec.durationMs, 0);
     const totalFrames = Math.max(1, Math.round((totalMs / 1000) * fps));
 
     const stream = out.captureStream(0);
@@ -863,11 +584,6 @@ async function exportFlythroughVideo({ stills, depths, specs, format, fps = 30, 
     const finished = new Promise((res) => { recorder.onstop = res; });
     recorder.start();
 
-    const drawShot = (shot, t) => {
-      renderShotFrame({ renderer, camera, scene: shot.built.scene, spec: shot.spec, s: shot.s, homeZ: shot.homeZ, maxDisp: shot.maxDisp }, t);
-      return renderer.domElement;
-    };
-
     // If the tab is hidden part-way through, everything recorded from that point is lost. Stop
     // and say so, rather than finishing and handing over a truncated file.
     let wentHidden = false;
@@ -883,7 +599,7 @@ async function exportFlythroughVideo({ stills, depths, specs, format, fps = 30, 
         if (wentHidden) break;
         const tMs = (f / fps) * 1000;
         // Same composer as the live preview, so the file is frame for frame what was on screen.
-        composeShowFrame(octx, w, h, shots, tMs, drawShot);
+        composeShowFrame(octx, w, h, shots, tMs);
         if (manualFrames) track.requestFrame();
 
         if (f % 5 === 0 && onProgress) onProgress({ phase: "render", current: f + 1, total: totalFrames });
@@ -928,14 +644,13 @@ function Rundvis() {
   const [voiceOverallError, setVoiceOverallError] = useState("");
   const [musicOn, setMusicOn] = useState(false);
 
-  // AI-gennemgang state: a deterministic, non-generative "3D Ken Burns" (see the module-level
+  // Walkthrough state: deterministic 2D camera motion (see the module-level
   // depth/parallax helpers above) - no AI video generation is involved any more, so there's no
   // upload step and no video URL to track, just the resized stills and their depth maps.
   const [flythroughStatus, setFlythroughStatus] = useState("idle"); // idle|processing|done|error
   const [flythroughError, setFlythroughError] = useState("");
   const [flythroughProgress, setFlythroughProgress] = useState({ current: 0, total: 0 });
   const [flythroughStills, setFlythroughStills] = useState([]); // resized data-URLs actually used, in upload order
-  const [flythroughDepths, setFlythroughDepths] = useState([]); // matching depth-map canvases, one per still
 
   // Video export state: the walkthrough is rendered to a real file in the browser (see
   // exportFlythroughVideo), so an agent can actually post it instead of only viewing it here.
@@ -1153,7 +868,7 @@ function Rundvis() {
 
   const allVoicesReady = voices.length === scenes.length && voices.every((v) => v && v.status === "ready");
 
-  // ---- AI-gennemgang: a deterministic, non-generative "3D Ken Burns" - see the depth/parallax
+  // ---- Walkthrough: deterministic 2D camera motion - see the motion helpers
   // helpers near the top of this file. Every uploaded photo (up to MAX_FLYTHROUGH_IMAGES) gets a
   // real per-pixel depth map estimated entirely client-side, then a virtual camera moves through
   // the resulting 3D mesh along a fixed path. No AI video generation, no upload, no per-run cost,
@@ -1161,12 +876,10 @@ function Rundvis() {
   // always produce the exact same depth maps and therefore the exact same moves. (The old
   // Luma-based AI clip code is still in api/generate-flythrough/ but is no longer wired in here.)
   const MAX_FLYTHROUGH_IMAGES = 8;
-  // Two different sizes, for two different jobs. Depth estimation is the slow step and gains
-  // nothing from a large input - a depth map is smooth by nature. The TEXTURE is what the viewer
-  // actually looks at, and downscaling it to match the depth input (as this used to) threw away
-  // the sharpness of the photos the agent uploaded. They are now kept apart.
-  const DEPTH_INPUT_MAX = 1024;   // what the model sees
-  const TEXTURE_MAX = 2560;       // what the viewer sees; enough for a 1080p export with room to push in
+  // Photos are kept at up to this size. A 1920-wide export at the tightest 10% crop samples at
+  // most ~2130 source pixels across, so 2560 leaves headroom while keeping several photos in
+  // memory comfortably. Anything smaller is left exactly as uploaded and never re-encoded.
+  const SOURCE_MAX = 2560;
 
   // Downscale a data-URL image in the browser (canvas). Returns the original untouched when it
   // is already within bounds, so nothing is ever re-encoded for no reason.
@@ -1189,9 +902,9 @@ function Rundvis() {
       img.src = dataUrl;
     });
 
-  // Estimates a depth map for every uploaded photo (in order) entirely in the browser, then
-  // starts the show. Runs sequentially so the progress readout stays accurate and the model
-  // (loaded once, cached in getDepthEstimator) isn't asked to do several images at once.
+  // Prepares the photos for playback. There is no model to download and no inference to wait
+  // for any more - only a resize where a photo is larger than the plates will ever need - so
+  // this finishes in well under a second instead of the forty it used to take.
   const runFlythrough = async () => {
     setFlythroughStatus("processing");
     setFlythroughError("");
@@ -1202,25 +915,18 @@ function Rundvis() {
       const used = images.slice(0, MAX_FLYTHROUGH_IMAGES);
       setFlythroughProgress({ current: 0, total: used.length });
       const stills = [];
-      const depths = [];
       for (let i = 0; i < used.length; i++) {
-        const forDepth = await resizeImageDataUrl(used[i].src, DEPTH_INPUT_MAX);
-        const forTexture = await resizeImageDataUrl(used[i].src, TEXTURE_MAX);
-        const depthCanvas = await estimateDepthCanvas(forDepth);
-        stills.push(forTexture);
-        depths.push(depthCanvas);
+        stills.push(await resizeImageDataUrl(used[i].src, SOURCE_MAX));
         setFlythroughProgress({ current: i + 1, total: used.length });
       }
       setFlythroughStills(stills);
-      setFlythroughDepths(depths);
       setFlythroughStatus("done");
     } catch (err) {
-      setFlythroughError(err.message || "3D-gennemgangen fejlede.");
+      setFlythroughError(err.message || "Gennemgangen fejlede.");
       setFlythroughStatus("error");
     }
   };
 
-  // Re-runs the whole thing (depth is cheap and local, so there's nothing to reuse).
   const regenerateFlythrough = () => runFlythrough();
 
   // The whole edit - shot design, beat-aligned durations, transitions and speed curves.
@@ -1240,7 +946,6 @@ function Rundvis() {
     try {
       const blob = await exportFlythroughVideo({
         stills: flythroughStills,
-        depths: flythroughDepths,
         specs: flythroughParams,
         format,
         fps: 30,
@@ -1369,7 +1074,7 @@ function Rundvis() {
             </div>
             {images.length >= 2 && (
               <button onClick={() => setStep(4)} className="flex items-center gap-1.5 text-xs mt-4" style={{ color: MUTED }}>
-                <Icon name="sparkles" size={12} /> Eller spring manuskript over og lav en AI-gennemgang med det samme
+                <Icon name="sparkles" size={12} /> Eller spring manuskript over og lav en filmisk gennemgang med det samme
               </button>
             )}
           </section>
@@ -1511,13 +1216,13 @@ function Rundvis() {
             )}
 
             <div className={scenes.length > 0 ? "pt-6 mt-2 border-t" : ""} style={{ borderColor: LINE }}>
-              {scenes.length === 0 && <h1 className="font-display text-2xl mb-1">AI-gennemgang</h1>}
-              {scenes.length > 0 && <h2 className="font-display text-lg mb-1">AI-gennemgang <span className="text-xs font-normal" style={{ color: MUTED }}>(eksperimentel)</span></h2>}
+              {scenes.length === 0 && <h1 className="font-display text-2xl mb-1">Filmisk gennemgang</h1>}
+              {scenes.length > 0 && <h2 className="font-display text-lg mb-1">Filmisk gennemgang</h2>}
               <p className="text-xs mb-1" style={{ color: MUTED }}>
-                Laver en filmisk gennemgang af op til {MAX_FLYTHROUGH_IMAGES} af dine billeder, hvor kameraet både bevæger sig og drejer i ægte 3D — beregnet ud fra et dybdekort af hvert billede, så forgrund og baggrund forskyder sig i forhold til hinanden, ligesom et kamera der faktisk panorerer rundt i rummet. Bagefter kan du hente resultatet som videofil i tre formater.
+                Klipper op til {MAX_FLYTHROUGH_IMAGES} af dine billeder sammen til en gennemgang med bevægelse, rytme og overgange. Bagefter kan du hente den som videofil i tre formater.
               </p>
               <p className="text-xs mb-1" style={{ color: MUTED }}>
-                Ingen AI-videogenerering er involveret — dybden beregnes lokalt i din browser med nøjagtig samme resultat hver gang, så der er ingen risiko for at kameraet "opfinder" en forkert bevægelse. Upload i den rækkefølge man skal bevæge sig igennem: facade/udefra først, så indgang, så rum for rum.
+                Dine billeder bliver aldrig forvrænget eller gendigtet — kameraet flytter kun udsnittet, så hver eneste pixel kommer direkte fra dit foto, og lige linjer forbliver lige. Første og sidste klip vises helt uden beskæring. Upload i den rækkefølge man skal bevæge sig igennem: facade/udefra først, så indgang, så rum for rum.
               </p>
               {images.length >= 1 && flythroughStatus === "idle" && (
                 <p className="text-xs mb-4" style={{ color: MUTED }}>
@@ -1527,13 +1232,13 @@ function Rundvis() {
 
               {flythroughStatus === "idle" && (
                 <button onClick={() => runFlythrough()} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium" style={{ backgroundColor: ACCENT, color: "#fff" }}>
-                  <Icon name="sparkles" size={15} /> Generér AI-gennemgang
+                  <Icon name="sparkles" size={15} /> Lav gennemgang
                 </button>
               )}
 
               {flythroughStatus === "processing" && (
                 <div className="flex items-center gap-2 text-sm mb-4" style={{ color: MUTED }}>
-                  <Icon name="loader" size={15} /> Beregner 3D-dybde for billede {flythroughProgress.current} af {flythroughProgress.total}…
+                  <Icon name="loader" size={15} /> Klargør billede {flythroughProgress.current} af {flythroughProgress.total}…
                 </div>
               )}
 
@@ -1574,7 +1279,6 @@ function Rundvis() {
                   <FlythroughStage
                     key={previewFormat}
                     stills={flythroughStills}
-                    depths={flythroughDepths}
                     specs={flythroughParams}
                     onError={(m) => { setFlythroughError(m); setFlythroughStatus("error"); }}
                   />
@@ -1650,7 +1354,7 @@ function Rundvis() {
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <p className="text-[10px] mb-4" style={{ color: MUTED }}>
-                  Ægte 3D-kamerabevægelse beregnet direkte i din browser ud fra dine billeder — ingen AI-videogenerering, så resultatet er identisk hver gang, og der er ingen omkostning pr. video.
+                  Alt beregnes i din browser: ingen upload, ingen ventetid, ingen omkostning pr. video — og samme billeder giver altid præcis samme video.
                 </p>
               )}
 
