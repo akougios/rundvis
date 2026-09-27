@@ -254,9 +254,18 @@ function ParallaxLayer({ src, depthCanvas, active, getProgress, spec, fadeMs }) 
       const fovRad = (camera.fov * Math.PI) / 180;
       const visibleH = 2 * HOME_Z * Math.tan(fovRad / 2);
       const visibleW = visibleH * frameAspect;
+      // SAFETY_ZOOM: the plane is sized a bit bigger than the minimal cover-fit on BOTH axes
+      // (not just the one that would otherwise overflow). Minimal cover-fit gives zero slack on
+      // one axis, so panning could only ever happen along the other - a flat, single-direction
+      // drift. Uniformly scaling the plane up gives every photo real headroom on both axes, for
+      // an actual "walking/looking around the room" sweep, while still guaranteeing (by
+      // construction) that the camera never sees past the photo's edge.
+      const SAFETY_ZOOM = 1.22;
       let planeW, planeH;
       if (aspect > frameAspect) { planeH = visibleH; planeW = planeH * aspect; }
       else { planeW = visibleW; planeH = planeW / aspect; }
+      planeW *= SAFETY_ZOOM;
+      planeH *= SAFETY_ZOOM;
 
       const segments = 60;
       const geometry = new THREE.PlaneGeometry(planeW, planeH, segments, segments);
@@ -290,26 +299,31 @@ function ParallaxLayer({ src, depthCanvas, active, getProgress, spec, fadeMs }) 
       // above (zero on the axis that matched exactly, the aspect-driven amount on the other).
       const slackX = Math.max(0, (planeW - visibleW) / 2);
       const slackY = Math.max(0, (planeH - visibleH) / 2);
-      const MAX_PUSH = 0.3 * HOME_Z;
-      const PAN_USE = 0.85;
+      const MAX_PUSH = 0.34 * HOME_Z;
+      const PAN_USE = 0.94;
       const pushDelta = spec.pushFrac * MAX_PUSH;
       const axis = slackX >= slackY ? "x" : "y";
       const slack = axis === "x" ? slackX : slackY;
       const otherSlack = axis === "x" ? slackY : slackX;
       const amt = slack * PAN_USE * spec.panFrac;
-      const otherAmt = otherSlack * PAN_USE * 0.5 * spec.panFrac;
+      const otherAmt = otherSlack * PAN_USE * 0.7 * spec.panFrac;
       const vec = (main, other) => (axis === "x" ? { x: main, y: other } : { x: other, y: main });
 
-      let camPath = { from: { x: 0, y: 0, z: HOME_Z }, to: { x: 0, y: 0, z: HOME_Z - pushDelta } };
+      // Even the straight-push shots (facade, index 0) get a gentle diagonal drift instead of a
+      // dead-center zoom, so nothing in the sequence reads as static.
+      let camPath = {
+        from: { ...vec(-spec.dirSign * amt * 0.25, spec.dirSign * otherAmt * 0.25), z: HOME_Z },
+        to: { ...vec(spec.dirSign * amt * 0.25, -spec.dirSign * otherAmt * 0.25), z: HOME_Z - pushDelta },
+      };
       if (spec.type === "pan") {
         camPath = {
-          from: { ...vec(-spec.dirSign * amt, spec.dirSign * otherAmt * 0.4), z: HOME_Z },
-          to: { ...vec(spec.dirSign * amt, -spec.dirSign * otherAmt * 0.4), z: HOME_Z - pushDelta * 0.35 },
+          from: { ...vec(-spec.dirSign * amt, spec.dirSign * otherAmt * 0.55), z: HOME_Z },
+          to: { ...vec(spec.dirSign * amt, -spec.dirSign * otherAmt * 0.55), z: HOME_Z - pushDelta * 0.4 },
         };
       } else if (spec.type === "orbit") {
         camPath = {
-          from: { ...vec(-spec.dirSign * amt * 0.6, spec.dirSign * otherAmt), z: HOME_Z },
-          to: { ...vec(spec.dirSign * amt * 0.6, -spec.dirSign * otherAmt), z: HOME_Z - pushDelta * 0.6 },
+          from: { ...vec(-spec.dirSign * amt * 0.7, spec.dirSign * otherAmt), z: HOME_Z },
+          to: { ...vec(spec.dirSign * amt * 0.7, -spec.dirSign * otherAmt), z: HOME_Z - pushDelta * 0.65 },
         };
       }
 
