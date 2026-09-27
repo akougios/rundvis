@@ -135,3 +135,48 @@ isolerede testsider deployet direkte til Vercel (three.js-rendering af et
 dybde-forskudt mesh, og klient-side dybde-estimering med
 `@huggingface/transformers`), før teknikken blev bygget ind i den rigtige
 app.
+
+---
+
+## Nuværende arkitektur (efter 3D-forsøget)
+
+Historikken ovenfor beskriver depth-parallax-løsningen. Den er nu udskiftet,
+og det er værd at vide hvorfor, så den ikke bliver genopfundet:
+
+**Depth-parallax blev droppet.** På rigtige boligfotos bøjede den billederne
+synligt — loftsbrædder der var lige i fotoet blev buede. Det er ikke en fejl
+der kan justeres væk: teknikken forskyder hver pixel efter et *estimeret*
+dybdekort, og estimatet er aldrig perfekt. Kravet om troskab mod de
+uploadede fotos og teknikken "ægte 3D fra ét foto" udelukker hinanden.
+
+Funktionen består nu af to lag:
+
+**1. Storyboard (gratis, øjeblikkeligt).** Ren 2D: kameraet flytter *rammen*
+hen over fotoet, aldrig pixels. Hver udgangspixel er en direkte gengivelse
+af originalen, så intet bøjer. Sorte kanter er umulige ved konstruktion.
+Beskæring 0–15,8 %; første og sidste klip vises helt ubeskåret.
+
+**2. Høj kvalitet (betalt, valgfrit).** Hvert foto sendes til en
+image-to-video-model, der laver et klip med rigtig kamerabevægelse gennem
+rummet. Kun de første 2–3 sekunder af hvert 5-sekunders klip bruges — dels
+fordi det matcher tempoet i rigtige boligvideoer, dels fordi modellen holder
+sig tættest på originalfotoet i starten og driver længere væk jo længere
+klippet kører.
+
+Begge lag deler samme klipning (`buildEditPlan`, `composeShowFrame`):
+beat-gitter på 116 BPM, hårde klip, dissolves, speed ramps, vignette. Det er
+klipningen der gør en boligvideo lækker, og den er uafhængig af hvordan
+billederne bevæger sig.
+
+### Nødvendige miljøvariabler i Vercel
+
+| Variabel | Bruges til |
+|---|---|
+| `FAL_KEY` | fal.ai-nøgle til videogenerering. Uden den virker storyboardet stadig; kun "Generér i høj kvalitet" fejler, med en forklarende besked. |
+| `FAL_MODEL` | Valgfri. Standard er `fal-ai/kling-video/v2.6/pro/image-to-video`. Kan skiftes uden kodeændring. |
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob. Videomodellen kræver et offentligt tilgængeligt billede-URL. |
+
+**Pris:** ~0,35 $ pr. klip (5 sek., lyd slået fra). En bolig med 8 rum koster
+altså ca. 2,80 $ i API-forbrug. Seedance 2.0 giver bedre bevægelse, men
+koster 0,68 $/sek. i 1080p — ca. 27 $ for samme bolig, hvilket ikke hænger
+sammen med markedets 9–15 $ pr. video.
