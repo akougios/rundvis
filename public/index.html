@@ -768,10 +768,18 @@ function pickRecorderMime() {
   return "";
 }
 
+const HIDDEN_TAB_MSG =
+  "Optagelsen kræver at denne fane er fremme. Browseren sætter canvas-optagelse på pause i en " +
+  "baggrundsfane, og filen bliver tom. Lad fanen være synlig, og prøv igen.";
+
 async function exportFlythroughVideo({ stills, depths, specs, format, fps = 30, onProgress }) {
   if (!window.MediaRecorder) throw new Error("Din browser understøtter ikke videooptagelse. Prøv Chrome eller Safari 17+.");
   const mime = pickRecorderMime();
   if (!mime) throw new Error("Din browser kan ikke optage video fra et canvas.");
+  // A backgrounded tab throttles timers and stops compositing the canvas, so MediaRecorder
+  // receives nothing and the recording comes out as a zero-byte file. Caught here rather than
+  // handed to the user as a download link that yields a broken file.
+  if (document.hidden) throw new Error(HIDDEN_TAB_MSG);
   const fmt = EXPORT_FORMATS[format];
   const w = fmt.w, h = fmt.h;
   const frameAspect = w / h;
@@ -835,26 +843,42 @@ async function exportFlythroughVideo({ stills, depths, specs, format, fps = 30, 
       return renderer.domElement;
     };
 
+    // If the tab is hidden part-way through, everything recorded from that point is lost. Stop
+    // and say so, rather than finishing and handing over a truncated file.
+    let wentHidden = false;
+    const onVis = () => { if (document.hidden) wentHidden = true; };
+    document.addEventListener("visibilitychange", onVis);
+
     // MediaRecorder timestamps frames by wall clock, so the loop is paced to real time rather
     // than run flat out - otherwise a slow machine would produce a correct-looking but
     // slow-motion file.
     const t0 = performance.now();
-    for (let f = 0; f < totalFrames; f++) {
-      const tMs = (f / fps) * 1000;
-      // Same composer as the live preview, so the file is frame for frame what was on screen.
-      composeShowFrame(octx, w, h, shots, tMs, drawShot);
-      if (manualFrames) track.requestFrame();
+    try {
+      for (let f = 0; f < totalFrames; f++) {
+        if (wentHidden) break;
+        const tMs = (f / fps) * 1000;
+        // Same composer as the live preview, so the file is frame for frame what was on screen.
+        composeShowFrame(octx, w, h, shots, tMs, drawShot);
+        if (manualFrames) track.requestFrame();
 
-      if (f % 5 === 0 && onProgress) onProgress({ phase: "render", current: f + 1, total: totalFrames });
-      const behind = performance.now() - t0;
-      const wait = tMs - behind;
-      await new Promise((r) => setTimeout(r, wait > 1 ? wait : 0));
+        if (f % 5 === 0 && onProgress) onProgress({ phase: "render", current: f + 1, total: totalFrames });
+        const behind = performance.now() - t0;
+        const wait = tMs - behind;
+        await new Promise((r) => setTimeout(r, wait > 1 ? wait : 0));
+      }
+    } finally {
+      document.removeEventListener("visibilitychange", onVis);
     }
 
     await new Promise((r) => setTimeout(r, 150));
     recorder.stop();
     await finished;
-    return new Blob(chunks, { type: mime.split(";")[0] });
+    const blob = new Blob(chunks, { type: mime.split(";")[0] });
+    // Last line of defence: whatever the cause, never hand back a file that isn't a video.
+    // An empty or near-empty blob means the recorder got nothing - most often a hidden tab.
+    if (blob.size < 2048) throw new Error(wentHidden || document.hidden ? HIDDEN_TAB_MSG : "Optagelsen blev tom. Prøv igen med fanen fremme.");
+    if (wentHidden) throw new Error(HIDDEN_TAB_MSG);
+    return blob;
   } finally {
     cleanup();
   }
@@ -1529,8 +1553,8 @@ function Rundvis() {
                   )}
 
                   {exportStatus === "working" && (
-                    <p className="text-[10px] mt-1" style={{ color: MUTED }}>
-                      Optagelsen kører i realtid, så den tager omtrent lige så lang tid som videoen varer. Lad fanen være åben og i forgrunden imens.
+                    <p className="text-[10px] mt-1" style={{ color: AMBER }}>
+                      Optagelsen kører i realtid og tager omtrent lige så lang tid som videoen varer. <strong>Bliv på denne fane imens</strong> — browseren pauser optagelsen i en baggrundsfane, og så bliver filen tom.
                     </p>
                   )}
 
