@@ -49,7 +49,12 @@ export const MODELS = {
       video: {
         resolution: "1080p",
         duration: "5s",
+        // Luma requires keyframes and keyframe_indexes to be given together or not at all
+        // ("video.keyframes and video.keyframe_indexes must both be provided or both omitted").
+        // One image pinned to frame 0 is the whole point here: it is the photo the clip starts
+        // from, and everything after it is the camera move.
         keyframes: [{ url: imageUrl }],
+        keyframe_indexes: [0],
       },
       concepts: [{ key: LUMA_CONCEPTS[motion] || "push_in" }],
     }),

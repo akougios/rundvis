@@ -1644,7 +1644,10 @@ function Rundvis() {
                         })}
                       </div>
                       {hqModels.filter((m) => m.key === hqModel).map((m) => (
-                        <p key={m.key} className="text-[10px]" style={{ color: MUTED }}>{m.note}</p>
+                        <p key={m.key} className="text-[10px]" style={{ color: MUTED }}>
+                          {m.note}
+                          {m.usdPerClip > 0 && " Kræver en FAL_KEY i Vercel."}
+                        </p>
                       ))}
                     </div>
                   )}
@@ -1699,7 +1702,7 @@ function Rundvis() {
                         >
                           Sammenlign alle {hqModels.length} modeller
                           <span style={{ color: MUTED }}>
-                            ~{hqModels.reduce((a, m) => a + m.usdPerClip, 0).toFixed(2)} $
+                            ~{hqModels.reduce((a, m) => a + m.usdPerClip, 0).toFixed(2)} $ + din Luma-konto
                           </span>
                         </button>
                       )}
@@ -1757,16 +1760,22 @@ function Rundvis() {
                     </div>
                   )}
 
-                  {hqStatus !== "working" && (
-                    <p className="text-[10px] mt-2" style={{ color: MUTED }}>
-                      Start med ét billede: så koster det ca.{" "}
-                      {hqModels.filter((m) => m.key === hqModel).map((m) => m.usdPerClip.toFixed(2))[0] || "0,35"} $ at
-                      se hvordan modellen klarer dine fotos, og du kan sammenligne modellerne for småpenge før du
-                      kører hele boligen. Hele boligen koster ca.{" "}
-                      {((hqModels.filter((m) => m.key === hqModel)[0]?.usdPerClip || 0.35) * flythroughStills.length).toFixed(2)} $.
-                      Regn med et par minutter pr. klip.
-                    </p>
-                  )}
+                  {hqStatus !== "working" && (() => {
+                    const m = hqModels.filter((x) => x.key === hqModel)[0];
+                    // A model billed on the user's own provider account has no price to show
+                    // here - printing "0.00 $" would read as free, which it is not.
+                    const priced = m && m.usdPerClip > 0;
+                    return (
+                      <p className="text-[10px] mt-2" style={{ color: MUTED }}>
+                        Start med ét billede — så ser du hvordan modellen klarer dine fotos, før du bruger noget på
+                        hele boligen.{" "}
+                        {priced
+                          ? `Ét klip ca. ${m.usdPerClip.toFixed(2)} $, hele boligen ca. ${(m.usdPerClip * flythroughStills.length).toFixed(2)} $.`
+                          : "Denne model afregnes på din egen konto hos udbyderen, så forbruget ses der."}{" "}
+                        Regn med et par minutter pr. klip.
+                      </p>
+                    );
+                  })()}
 
                   {hqStatus === "working" && (
                     <div>
