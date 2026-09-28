@@ -799,6 +799,10 @@ function Rundvis() {
   // easiest thing these models have to do - open scene, no doorframes, no furniture to bend.
   // Judging a model on the facade would flatter every one of them and could pick the wrong one.
   const [compareIndex, setCompareIndex] = useState(0);
+  // Test quality trades resolution for price on models that support it. It exists because the
+  // opposite default was a costly mistake: generating at full resolution while showing no price
+  // burned through an account's credit in three clips.
+  const [hqQuality, setHqQuality] = useState("test");
   useEffect(() => {
     if (flythroughStills.length > 1) setCompareIndex(1);
     else setCompareIndex(0);
@@ -1095,6 +1099,14 @@ function Rundvis() {
   //
   // The photo is uploaded ONCE and the same URL handed to all three, so the comparison is of the
   // models and nothing else.
+  // What one clip costs on a given model at the current quality, or null when the provider
+  // bills it on the user's own account in a way we cannot price.
+  const prisPrKlip = (m) => {
+    if (!m) return null;
+    if (m.priceByQuality) return m.priceByQuality[hqQuality] ?? m.priceByQuality.test;
+    return m.usdPerClip > 0 ? m.usdPerClip : null;
+  };
+
   const runModelComparison = async () => {
     if (!hqModels.length || flythroughStills.length === 0) return;
     if (compareRuns && compareRuns.some((r) => r.status === "working")) return;
@@ -1129,7 +1141,7 @@ function Rundvis() {
           const create = await fetch("/api/generate-clip/create", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ imageUrl, motion, model: m.key, aspectRatio: previewFormat, seed: 1000 }),
+            body: JSON.stringify({ imageUrl, motion, model: m.key, aspectRatio: previewFormat, seed: 1000, quality: hqQuality }),
           });
           const created = await create.json();
           if (!create.ok) throw new Error(created.error || "Kunne ikke starte klippet.");
@@ -1211,6 +1223,7 @@ function Rundvis() {
             // Fixed per photo index, so on a model with a seed a regenerated walkthrough is
             // identical rather than merely similar.
             seed: 1000 + i,
+            quality: hqQuality,
           }),
         });
         const created = await create.json();
@@ -1623,6 +1636,33 @@ function Rundvis() {
 
                   {hqStatus !== "working" && hqModels.length > 0 && (
                     <div className="mb-3">
+                      <p className="text-[11px] mb-1.5" style={{ color: MUTED }}>Kvalitet</p>
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {[
+                          { k: "test", t: "Test", u: "billigst — brug den til at vurdere modellen" },
+                          { k: "final", t: "Endelig", u: "fuld opløsning — brug den når modellen er valgt" },
+                        ].map((q) => {
+                          const on = hqQuality === q.k;
+                          const m = hqModels.filter((x) => x.key === hqModel)[0];
+                          const pris = m && m.priceByQuality ? m.priceByQuality[q.k] : m ? m.usdPerClip : null;
+                          return (
+                            <button
+                              key={q.k}
+                              onClick={() => setHqQuality(q.k)}
+                              className="px-3 py-1.5 rounded-full text-xs whitespace-nowrap"
+                              style={{
+                                border: `1px solid ${on ? ACCENT : LINE}`,
+                                backgroundColor: on ? ACCENT : "transparent",
+                                color: on ? "#fff" : MUTED,
+                              }}
+                              title={q.u}
+                            >
+                              {q.t}
+                              {pris ? <span style={{ opacity: 0.75 }}> ~{pris.toFixed(2)} $/klip</span> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
                       <p className="text-[11px] mb-1.5" style={{ color: MUTED }}>Videomodel</p>
                       <div className="flex flex-wrap gap-2 mb-2">
                         {hqModels.map((m) => {
@@ -1638,7 +1678,7 @@ function Rundvis() {
                                 color: on ? "#fff" : MUTED,
                               }}
                             >
-                              {m.label} <span style={{ opacity: 0.75 }}>{m.usdPerClip > 0 ? m.usdPerClip.toFixed(2) + " $" : "din Luma-konto"}</span>
+                              {m.label} <span style={{ opacity: 0.75 }}>{prisPrKlip(m) ? "~" + prisPrKlip(m).toFixed(2) + " $" : "?"}</span>
                             </button>
                           );
                         })}
@@ -1702,7 +1742,7 @@ function Rundvis() {
                         >
                           Sammenlign alle {hqModels.length} modeller
                           <span style={{ color: MUTED }}>
-                            ~{hqModels.reduce((a, m) => a + m.usdPerClip, 0).toFixed(2)} $ + din Luma-konto
+                            ~{hqModels.reduce((a, m) => a + (prisPrKlip(m) || 0), 0).toFixed(2)} $
                           </span>
                         </button>
                       )}
@@ -1740,7 +1780,7 @@ function Rundvis() {
                             <div className="px-3 py-2">
                               <p className="text-xs" style={{ color: TEXT }}>{r.label}</p>
                               <p className="text-[10px]" style={{ color: MUTED }}>
-                                {r.usdPerClip > 0 ? r.usdPerClip.toFixed(2) + " $ pr. klip" : "afregnes på din Luma-konto"}
+                                {r.usdPerClip > 0 ? "~" + r.usdPerClip.toFixed(2) + " $ pr. klip" : "pris ukendt"}
                                 {r.status === "done" && " · færdig"}
                                 {r.status === "working" && " · arbejder"}
                               </p>
@@ -1764,14 +1804,14 @@ function Rundvis() {
                     const m = hqModels.filter((x) => x.key === hqModel)[0];
                     // A model billed on the user's own provider account has no price to show
                     // here - printing "0.00 $" would read as free, which it is not.
-                    const priced = m && m.usdPerClip > 0;
+                    const priced = prisPrKlip(m) != null;
                     return (
                       <p className="text-[10px] mt-2" style={{ color: MUTED }}>
                         Start med ét billede — så ser du hvordan modellen klarer dine fotos, før du bruger noget på
                         hele boligen.{" "}
                         {priced
-                          ? `Ét klip ca. ${m.usdPerClip.toFixed(2)} $, hele boligen ca. ${(m.usdPerClip * flythroughStills.length).toFixed(2)} $.`
-                          : "Denne model afregnes på din egen konto hos udbyderen, så forbruget ses der."}{" "}
+                          ? `Ét klip ca. ${prisPrKlip(m).toFixed(2)} $, alle ${flythroughStills.length} ca. ${(prisPrKlip(m) * flythroughStills.length).toFixed(2)} $.`
+                          : "Prisen på denne model kendes ikke her — se forbruget hos udbyderen."}{" "}
                         Regn med et par minutter pr. klip.
                       </p>
                     );

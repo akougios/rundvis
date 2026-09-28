@@ -38,7 +38,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { imageUrl, motion, model, aspectRatio, seed } = req.body || {};
+  const { imageUrl, motion, model, aspectRatio, seed, quality } = req.body || {};
   if (!imageUrl || typeof imageUrl !== "string" || !/^https:\/\//.test(imageUrl)) {
     res.status(400).json({ error: "Mangler et gyldigt billede-URL (https)." });
     return;
@@ -58,6 +58,7 @@ export default async function handler(req, res) {
       negativePrompt: NEGATIVE_PROMPT,
       aspectRatio,
       motion,
+      quality: quality === "final" ? "final" : "test",
       // Only used by models that support it; a fixed seed per photo index means a regenerated
       // walkthrough is identical on those models.
       seed: typeof seed === "number" ? seed : undefined,

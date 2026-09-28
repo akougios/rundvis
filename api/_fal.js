@@ -36,18 +36,26 @@ export const MODELS = {
   "luma-direct": {
     label: "Luma Ray 3.2",
     provider: "luma",
-    // Billed on the Luma account this project already has a key for.
-    note: "Bruger din eksisterende Luma-nøgle — ingen ny konto. Strukturerede kamerabevægelser (push_in, orbit, crane) frem for kun prosa.",
+    // Uses the LUMA_API_KEY this project already had, so no new account is needed. But it is
+    // NOT the cheap option: Luma bills roughly $0.95 for a 1080p 5s clip against about $0.32 at
+    // 540p and $0.45 at 720p, and the fal models below land near $0.35 for a comparable clip.
+    // Defaulting this to 1080p (as an earlier version did) while showing no price at all made
+    // the most expensive choice look like the free one. Hence: a real estimate, and 720p by
+    // default for testing.
+    note: "Bruger din eksisterende Luma-nøgle — ingen ny konto. Strukturerede kamerabevægelser (push_in, orbit, crane). Dyrere pr. klip end fal-modellerne.",
     seconds: 5,
-    usdPerSecond: 0.0,   // billed by Luma directly; not priced here
+    // Luma's own per-clip prices by resolution, used for the estimate shown in the app.
+    priceByQuality: { test: 0.45, final: 0.95 },
+    resolutionByQuality: { test: "720p", final: "1080p" },
+    usdPerSecond: 0.09, // ~0.45 per 5s clip at the default (test) quality
     deterministic: false,
-    build: ({ imageUrl, prompt, aspectRatio, motion }) => ({
+    build: ({ imageUrl, prompt, aspectRatio, motion, quality }) => ({
       model: "ray-3.2",
       type: "video",
       prompt,
       aspect_ratio: aspectRatio && aspectRatio !== "auto" ? aspectRatio : "16:9",
       video: {
-        resolution: "1080p",
+        resolution: quality === "final" ? "1080p" : "720p",
         duration: "5s",
         // Luma requires keyframes and keyframe_indexes to be given together or not at all
         // ("video.keyframes and video.keyframe_indexes must both be provided or both omitted").

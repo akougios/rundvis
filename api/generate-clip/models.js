@@ -17,6 +17,10 @@ export default function handler(req, res) {
       note: m.note,
       seconds: m.seconds,
       usdPerClip: Number((m.usdPerSecond * m.seconds).toFixed(3)),
+      // Models that can trade resolution for price expose both, so the app can show what a
+      // test run costs against a final one instead of hiding it.
+      priceByQuality: m.priceByQuality || null,
+      resolutionByQuality: m.resolutionByQuality || null,
       deterministic: m.deterministic,
     })),
   });
