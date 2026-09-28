@@ -6,7 +6,7 @@
 // ../_fal.js) so this cannot be turned into a way of making our server fetch arbitrary URLs
 // with our credentials attached.
 
-import { assertFalUrl, falKeyOrRespond, falHeaders } from "../_fal.js";
+import { assertFalUrl, falKeyOrRespond, falHeaders, lumaKeyOrRespond, LUMA_BASE, signVideoUrl } from "../_fal.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -14,10 +14,46 @@ export default async function handler(req, res) {
     return;
   }
 
+  const { provider, id, statusUrl, responseUrl } = req.body || {};
+
+  // Luma: one generation id, polled on Luma's own API.
+  if (provider === "luma") {
+    const lumaKey = lumaKeyOrRespond(res);
+    if (!lumaKey) return;
+    if (!id || typeof id !== "string") {
+      res.status(400).json({ error: "Mangler generation-id." });
+      return;
+    }
+    try {
+      const lr = await fetch(`${LUMA_BASE}/${encodeURIComponent(id)}`, {
+        headers: { Authorization: `Bearer ${lumaKey}` },
+      });
+      const data = await lr.json();
+      if (!lr.ok) {
+        res.status(lr.status).json({ error: `Luma-fejl: ${JSON.stringify(data).slice(0, 300)}` });
+        return;
+      }
+      if (data.state === "failed") {
+        res.status(502).json({ error: `Luma kunne ikke lave klippet: ${data.failure_reason || data.failure_code || "ukendt årsag"}` });
+        return;
+      }
+      const out = Array.isArray(data.output) ? data.output.find((o) => o.url) || data.output[0] : null;
+      if (data.state === "completed" && out && out.url) {
+        // Signed here, so the proxy can prove this URL came from us (see api/proxy-video.js).
+        res.status(200).json({ done: true, videoUrl: out.url, sig: await signVideoUrl(out.url) });
+        return;
+      }
+      res.status(200).json({ done: false, status: data.state || "processing" });
+      return;
+    } catch (err) {
+      res.status(500).json({ error: `Kunne ikke hente status: ${err.message}` });
+      return;
+    }
+  }
+
   const key = falKeyOrRespond(res);
   if (!key) return;
 
-  const { statusUrl, responseUrl } = req.body || {};
   let safeStatus, safeResponse;
   try {
     safeStatus = assertFalUrl(statusUrl);
@@ -61,7 +97,7 @@ export default async function handler(req, res) {
       return;
     }
 
-    res.status(200).json({ done: true, videoUrl });
+    res.status(200).json({ done: true, videoUrl, sig: await signVideoUrl(videoUrl) });
   } catch (err) {
     res.status(500).json({ error: `Kunne ikke hente status: ${err.message}` });
   }

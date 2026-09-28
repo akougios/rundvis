@@ -1,48 +1,47 @@
 // Serverless function (Vercel, Edge runtime) — streams a generated clip back through our own
 // domain.
 //
-// WHY THIS EXISTS. The finished clips live on fal's media hosts. Drawing a video from another
-// origin onto a canvas marks that canvas as "tainted", and a tainted canvas cannot be read back
-// - which kills both the frame compositing the player does and the MediaRecorder export. Served
-// from our own origin instead, there is nothing to taint and everything downstream keeps working
-// whatever CORS headers fal happens to send.
+// WHY THIS EXISTS. The finished clips live on the video provider's media hosts. Drawing a video
+// from another origin onto a canvas marks that canvas as "tainted", and a tainted canvas cannot
+// be read back - which kills both the frame compositing the player does and the MediaRecorder
+// export. Served from our own origin instead, there is nothing to taint and everything
+// downstream keeps working whatever CORS headers the provider happens to send.
+//
+// WHY SIGNATURES RATHER THAN A HOST ALLOWLIST. The obvious guard is a list of permitted
+// hostnames, but a CDN host has to be guessed: too narrow and clips fail to play, too broad and
+// this becomes an open proxy (an earlier version allowed *.amazonaws.com, i.e. every S3 bucket
+// in existence). The URL is instead signed by the status endpoint at the moment it is handed to
+// the browser, and refused here without a matching signature. Provenance is proven, not guessed,
+// and a new provider needs no change here at all.
 //
 // Edge runtime on purpose: it streams the response straight through, so a 10 MB clip is not held
 // in memory and does not run into the response size cap that applies to ordinary serverless
 // functions.
 
+import { verifyVideoUrl } from "./_fal.js";
+
 export const config = { runtime: "edge" };
 
-// Only fal's own media hosts. Without this the endpoint would happily fetch anything on the
-// internet on a caller's behalf.
-function allowed(urlStr) {
-  let u;
-  try {
-    u = new URL(urlStr);
-  } catch (e) {
-    return false;
-  }
-  if (u.protocol !== "https:") return false;
-  return u.hostname === "fal.media" || u.hostname.endsWith(".fal.media") || u.hostname.endsWith(".fal.run");
+function bad(status, message) {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 export default async function handler(req) {
-  const url = new URL(req.url).searchParams.get("url");
-  if (!url || !allowed(url)) {
-    return new Response(JSON.stringify({ error: "Ugyldig eller ikke-tilladt video-URL." }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
+  const params = new URL(req.url).searchParams;
+  const url = params.get("url");
+  const sig = params.get("sig");
+
+  if (!url || !/^https:\/\//.test(url)) return bad(400, "Ugyldig video-URL.");
+  if (!(await verifyVideoUrl(url, sig))) return bad(403, "Video-URL'en er ikke signeret af serveren.");
 
   // Range headers are passed through so the browser can seek within the clip.
   const range = req.headers.get("range");
   const upstream = await fetch(url, { headers: range ? { Range: range } : {} });
   if (!upstream.ok && upstream.status !== 206) {
-    return new Response(JSON.stringify({ error: `Kunne ikke hente videoen (${upstream.status}).` }), {
-      status: 502,
-      headers: { "Content-Type": "application/json" },
-    });
+    return bad(502, `Kunne ikke hente videoen (${upstream.status}).`);
   }
 
   const headers = new Headers();

@@ -13,9 +13,51 @@
 // There is deliberately no single "best" here. The three differ in ways that only matter once
 // you look at real listing photos, which is why the app can generate a single test clip on any
 // of them rather than committing to a whole property.
+// Luma's own API, reached directly with the LUMA_API_KEY this project already had from the
+// earlier experiments - so the very first real clip costs no new account and no new signup.
+// Luma's `concepts` are structured camera moves (push_in, orbit_left, ...), which is a stronger
+// and more literal motion instruction than prose in a prompt.
+//
+// NOTE on the history in the README: the earlier failures here were with MULTI-keyframe
+// requests, where Luma had to invent a path between two different photos. That is a far harder
+// task than animating one image, and the concepts feature is documented for the single-image
+// case. It is a different mode, not the one that failed.
+export const LUMA_BASE = "https://agents.lumalabs.ai/v1/generations";
+
+export const LUMA_CONCEPTS = {
+  push: "push_in",
+  pull: "pull_out",
+  pan: "pan_left",
+  drift: "crane_up",
+  orbit: "orbit_left",
+};
+
 export const MODELS = {
+  "luma-direct": {
+    label: "Luma Ray 3.2",
+    provider: "luma",
+    // Billed on the Luma account this project already has a key for.
+    note: "Bruger din eksisterende Luma-nøgle — ingen ny konto. Strukturerede kamerabevægelser (push_in, orbit, crane) frem for kun prosa.",
+    seconds: 5,
+    usdPerSecond: 0.0,   // billed by Luma directly; not priced here
+    deterministic: false,
+    build: ({ imageUrl, prompt, aspectRatio, motion }) => ({
+      model: "ray-3.2",
+      type: "video",
+      prompt,
+      aspect_ratio: aspectRatio && aspectRatio !== "auto" ? aspectRatio : "16:9",
+      video: {
+        resolution: "1080p",
+        duration: "5s",
+        keyframes: [{ url: imageUrl }],
+      },
+      concepts: [{ key: LUMA_CONCEPTS[motion] || "push_in" }],
+    }),
+  },
+
   "kling-2.6-pro": {
     label: "Kling 2.6 Pro",
+    provider: "fal",
     endpoint: "fal-ai/kling-video/v2.6/pro/image-to-video",
     // Strong at holding the supplied frame. Cheapest credible 1080p option. No seed, so a
     // regenerated clip will not be identical.
@@ -36,6 +78,7 @@ export const MODELS = {
 
   "seedance-1-pro": {
     label: "Seedance 1.0 Pro",
+    provider: "fal",
     endpoint: "fal-ai/bytedance/seedance/v1/pro/image-to-video",
     // The only one of the three with a SEED, which matters for this product: the app promises
     // that the same photos give the same video. It also takes an exact duration, so we can buy
@@ -56,7 +99,8 @@ export const MODELS = {
   },
 
   "luma-ray2": {
-    label: "Luma Ray 2",
+    label: "Luma Ray 2 (via fal)",
+    provider: "fal",
     endpoint: "fal-ai/luma-dream-machine/ray-2/image-to-video",
     // Luma's camera language (dolly, orbit, crane) is the most "directed" of the three, which is
     // exactly the vocabulary a property film uses - and it is by far the cheapest per second.
@@ -76,7 +120,9 @@ export const MODELS = {
   },
 };
 
-export const DEFAULT_MODEL = process.env.FAL_MODEL_KEY || "kling-2.6-pro";
+// Defaults to the one that needs no new account, so the app works out of the box with the key
+// this project already had.
+export const DEFAULT_MODEL = process.env.FAL_MODEL_KEY || "luma-direct";
 
 export function resolveModel(key) {
   const k = key && MODELS[key] ? key : DEFAULT_MODEL;
@@ -101,6 +147,19 @@ export function assertFalUrl(url) {
   return parsed.toString();
 }
 
+export function lumaKeyOrRespond(res) {
+  const key = process.env.LUMA_API_KEY;
+  if (!key) {
+    res.status(500).json({
+      error:
+        "Serveren mangler LUMA_API_KEY. Sæt den under Vercel → Settings → Environment Variables, " +
+        "eller vælg en model der kører via fal.",
+    });
+    return null;
+  }
+  return key;
+}
+
 export function falKeyOrRespond(res) {
   const key = process.env.FAL_KEY;
   if (!key) {
@@ -116,4 +175,37 @@ export function falKeyOrRespond(res) {
 
 export function falHeaders(key) {
   return { Authorization: `Key ${key}`, "Content-Type": "application/json" };
+}
+
+// ---- Signed video URLs ---------------------------------------------------------------------
+// The finished clip lives on the provider's CDN and the browser asks our proxy to stream it.
+// Allowlisting the provider's hostnames looked like enough, but it is not: guessing a CDN host
+// means either guessing too narrowly (the clip fails to play) or too broadly - an earlier
+// version allowed *.amazonaws.com, which would have turned this site into an open proxy for
+// every S3 bucket on the internet.
+//
+// Instead the URL is signed here when it is handed to the browser, and the proxy refuses
+// anything without a matching signature. Provenance is then proven rather than guessed, and
+// adding a provider later needs no allowlist change at all.
+function proxySecret() {
+  return process.env.VIDEO_PROXY_SECRET || process.env.FAL_KEY || process.env.LUMA_API_KEY || "";
+}
+
+export async function signVideoUrl(url) {
+  const secret = proxySecret();
+  if (!secret) return "";
+  const enc = new TextEncoder();
+  const k = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = await crypto.subtle.sign("HMAC", k, enc.encode(url));
+  return Array.from(new Uint8Array(mac)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function verifyVideoUrl(url, sig) {
+  if (!sig) return false;
+  const expected = await signVideoUrl(url);
+  if (!expected || expected.length !== sig.length) return false;
+  // Constant-time compare, so the signature cannot be discovered a character at a time.
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ sig.charCodeAt(i);
+  return diff === 0;
 }

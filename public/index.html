@@ -469,11 +469,19 @@ function SceneLayer({ src, active, isPlaying, getProgress, kbParams, fadeMs }) {
   );
 }
 
+// The proxy only serves a URL the server signed, so both the url and its signature travel
+// together everywhere a clip does.
+function proxyUrlFor(clip) {
+  const url = typeof clip === "string" ? clip : clip.url;
+  const sig = typeof clip === "string" ? "" : clip.sig || "";
+  return "/api/proxy-video?url=" + encodeURIComponent(url) + "&sig=" + encodeURIComponent(sig);
+}
+
 // Loads a generated clip into a <video> ready for canvas compositing. It is fetched through our
 // own proxy and handed to the element as a blob: URL, which makes it same-origin - without that
 // the canvas would be tainted and neither the player nor the export could read a pixel back.
-async function loadClipVideo(clipUrl) {
-  const res = await fetch("/api/proxy-video?url=" + encodeURIComponent(clipUrl));
+async function loadClipVideo(clip) {
+  const res = await fetch(proxyUrlFor(clip));
   if (!res.ok) throw new Error("Kunne ikke hente det genererede klip.");
   const blob = await res.blob();
   const v = document.createElement("video");
@@ -1131,11 +1139,14 @@ function Rundvis() {
             const st = await fetch("/api/generate-clip/status", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ statusUrl: created.statusUrl, responseUrl: created.responseUrl }),
+              body: JSON.stringify({
+                provider: created.provider, id: created.id,
+                statusUrl: created.statusUrl, responseUrl: created.responseUrl,
+              }),
             });
             const stJson = await st.json();
             if (!st.ok) throw new Error(stJson.error || "Kunne ikke hente status.");
-            if (stJson.done) { update(m.key, { status: "done", clipUrl: stJson.videoUrl }); return; }
+            if (stJson.done) { update(m.key, { status: "done", clipUrl: stJson.videoUrl, sig: stJson.sig }); return; }
           }
           throw new Error("Blev ikke færdig i tide.");
         } catch (err) {
@@ -1213,11 +1224,14 @@ function Rundvis() {
           const st = await fetch("/api/generate-clip/status", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ statusUrl: created.statusUrl, responseUrl: created.responseUrl }),
+            body: JSON.stringify({
+              provider: created.provider, id: created.id,
+              statusUrl: created.statusUrl, responseUrl: created.responseUrl,
+            }),
           });
           const stJson = await st.json();
           if (!st.ok) throw new Error(stJson.error || "Kunne ikke hente status.");
-          if (stJson.done) { clipUrl = stJson.videoUrl; break; }
+          if (stJson.done) { clipUrl = { url: stJson.videoUrl, sig: stJson.sig }; break; }
         }
         if (!clipUrl) throw new Error(`Klip ${i + 1} blev ikke færdigt i tide. Prøv igen.`);
         clips[i] = clipUrl;
@@ -1624,7 +1638,7 @@ function Rundvis() {
                                 color: on ? "#fff" : MUTED,
                               }}
                             >
-                              {m.label} <span style={{ opacity: 0.75 }}>{m.usdPerClip.toFixed(2)} $</span>
+                              {m.label} <span style={{ opacity: 0.75 }}>{m.usdPerClip > 0 ? m.usdPerClip.toFixed(2) + " $" : "din Luma-konto"}</span>
                             </button>
                           );
                         })}
@@ -1706,7 +1720,7 @@ function Rundvis() {
                             >
                               {r.clipUrl ? (
                                 <video
-                                  src={`/api/proxy-video?url=${encodeURIComponent(r.clipUrl)}`}
+                                  src={proxyUrlFor({ url: r.clipUrl, sig: r.sig })}
                                   className="absolute inset-0 w-full h-full object-cover"
                                   controls
                                   loop
@@ -1723,7 +1737,7 @@ function Rundvis() {
                             <div className="px-3 py-2">
                               <p className="text-xs" style={{ color: TEXT }}>{r.label}</p>
                               <p className="text-[10px]" style={{ color: MUTED }}>
-                                {r.usdPerClip.toFixed(2)} $ pr. klip
+                                {r.usdPerClip > 0 ? r.usdPerClip.toFixed(2) + " $ pr. klip" : "afregnes på din Luma-konto"}
                                 {r.status === "done" && " · færdig"}
                                 {r.status === "working" && " · arbejder"}
                               </p>

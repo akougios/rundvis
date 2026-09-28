@@ -5,7 +5,7 @@
 // must show the property that is actually for sale. So every prompt below says what the CAMERA
 // does and states, repeatedly and concretely, that the room itself must not change.
 
-import { resolveModel, falKeyOrRespond, falHeaders } from "../_fal.js";
+import { resolveModel, falKeyOrRespond, falHeaders, lumaKeyOrRespond, LUMA_BASE } from "../_fal.js";
 
 // Shared across every shot. Kept short and concrete - long flowery prompts make these models
 // invent atmosphere, which is exactly what we do not want.
@@ -38,9 +38,6 @@ export default async function handler(req, res) {
     return;
   }
 
-  const key = falKeyOrRespond(res);
-  if (!key) return;
-
   const { imageUrl, motion, model, aspectRatio, seed } = req.body || {};
   if (!imageUrl || typeof imageUrl !== "string" || !/^https:\/\//.test(imageUrl)) {
     res.status(400).json({ error: "Mangler et gyldigt billede-URL (https)." });
@@ -50,16 +47,41 @@ export default async function handler(req, res) {
   const m = resolveModel(model);
   const motionLine = MOTION[motion] || MOTION.push;
 
+  // Each provider needs its own key, so which one is missing depends on the chosen model.
+  const key = m.provider === "luma" ? lumaKeyOrRespond(res) : falKeyOrRespond(res);
+  if (!key) return;
+
   try {
     const input = m.build({
       imageUrl,
       prompt: `${BASE_PROMPT} ${motionLine}`,
       negativePrompt: NEGATIVE_PROMPT,
       aspectRatio,
+      motion,
       // Only used by models that support it; a fixed seed per photo index means a regenerated
       // walkthrough is identical on those models.
       seed: typeof seed === "number" ? seed : undefined,
     });
+
+    // Luma is called directly and answers with a generation id to poll; fal answers with
+    // absolute queue URLs. The client is handed whichever shape applies, tagged with the
+    // provider so the status endpoint knows how to read it.
+    if (m.provider === "luma") {
+      const lr = await fetch(LUMA_BASE, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify(input),
+      });
+      const lText = await lr.text();
+      let lData;
+      try { lData = JSON.parse(lText); } catch (e) { lData = null; }
+      if (!lr.ok) {
+        res.status(lr.status).json({ error: `${m.label} afviste kaldet: ${lText.slice(0, 400)}` });
+        return;
+      }
+      res.status(200).json({ provider: "luma", id: lData.id, model: m.key, modelLabel: m.label });
+      return;
+    }
 
     const r = await fetch(`https://queue.fal.run/${m.endpoint}`, {
       method: "POST",
@@ -85,6 +107,7 @@ export default async function handler(req, res) {
     // fal returns absolute URLs for polling; they are handed straight back to the client and
     // checked again against an allowlist when they come back (see ../_fal.js).
     res.status(200).json({
+      provider: "fal",
       requestId: data.request_id,
       statusUrl: data.status_url,
       responseUrl: data.response_url,
