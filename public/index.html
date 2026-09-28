@@ -786,6 +786,15 @@ function Rundvis() {
   // listing photos is not answerable from documentation, and this makes answering it cost about
   // a krone per model instead of a whole property per model.
   const [compareRuns, setCompareRuns] = useState(null); // [{key,label,usdPerClip,status,clipUrl,error}]
+  // Which photo the bake-off and the single-photo test use. Defaults to the SECOND photo, not
+  // the first: by the app's own upload guidance photo 1 is the facade, and an exterior is the
+  // easiest thing these models have to do - open scene, no doorframes, no furniture to bend.
+  // Judging a model on the facade would flatter every one of them and could pick the wrong one.
+  const [compareIndex, setCompareIndex] = useState(0);
+  useEffect(() => {
+    if (flythroughStills.length > 1) setCompareIndex(1);
+    else setCompareIndex(0);
+  }, [flythroughStills.length]);
 
   // The model list comes from the server so there is only one place where models are defined.
   useEffect(() => {
@@ -1092,7 +1101,7 @@ function Rundvis() {
       const up = await fetch("/api/upload-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dataUrl: flythroughStills[0], filename: `rundvis-sammenlign-${Date.now()}.jpg` }),
+        body: JSON.stringify({ dataUrl: flythroughStills[compareIndex], filename: `rundvis-sammenlign-${Date.now()}.jpg` }),
       });
       const upJson = await up.json();
       if (!up.ok) throw new Error(upJson.error || "Kunne ikke uploade billedet.");
@@ -1102,7 +1111,7 @@ function Rundvis() {
       return;
     }
 
-    const motion = flythroughParams[0] ? flythroughParams[0].type : "push";
+    const motion = flythroughParams[compareIndex] ? flythroughParams[compareIndex].type : "push";
     const update = (key, patch) =>
       setCompareRuns((prev) => (prev || []).map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
@@ -1626,10 +1635,35 @@ function Rundvis() {
                     </div>
                   )}
 
+                  {hqStatus !== "working" && flythroughStills.length > 1 && (
+                    <div className="mb-3">
+                      <p className="text-[11px] mb-1.5" style={{ color: MUTED }}>
+                        Testbillede — vælg et <strong>rum</strong>, ikke facaden. Udendørs er let for modellerne;
+                        det er dørkarme, møbler og vinduer der afslører dem.
+                      </p>
+                      <div className="flex gap-2 overflow-x-auto pb-1">
+                        {flythroughStills.map((src, i) => (
+                          <button
+                            key={i}
+                            onClick={() => setCompareIndex(i)}
+                            className="shrink-0 rounded-md overflow-hidden"
+                            style={{
+                              width: 64, height: 44,
+                              border: `2px solid ${compareIndex === i ? ACCENT : "transparent"}`,
+                              opacity: compareIndex === i ? 1 : 0.55,
+                            }}
+                          >
+                            <img src={src} alt="" className="w-full h-full object-cover" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {hqStatus !== "working" && (
                     <div className="flex flex-wrap items-center gap-2">
                       <button
-                        onClick={() => runHighQuality([0])}
+                        onClick={() => runHighQuality([compareIndex])}
                         className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium"
                         style={{ border: `1px solid ${ACCENT}`, color: ACCENT }}
                       >
