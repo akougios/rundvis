@@ -199,6 +199,35 @@ modsatte: klippene kommer ud af starthullet i bevægelse og bremser ned mod en
 stilstand. Springet gik altså forbi ægte bevægelse for at sætte sig tættere på
 den døde ende.
 
+### Overgange: begge sider af snittet skal bevæge sig
+
+Et snit mellem to klip der begge bevæger sig er usynligt. Et snit fra noget
+der bevæger sig til noget der står stille læses som et hak — også selvom
+begge klip er fine hver for sig. Tre ting stod i vejen, og de var alle tre
+den samme fejl set fra hver sin side:
+
+1. **Det udgående klip parkerede.** Det blev tegnet med `progress = 1` under
+   overblændingen, og `easeShot` klampede til 1 — så det stod bomstille under
+   hele overgangen. Hastighedskurverne var udtrykkeligt formet for at undgå
+   netop det ("ingen af dem bremser ned til stilstand"), og så blev det
+   genindført én linje senere. Kurven fortsætter nu forbi sin slutning i en
+   ret linje med den fart den sluttede med.
+2. **Det udgående *videoklip* blev sat på pause.** Samme fejl, videosiden.
+   Det kører nu videre gennem overblændingen.
+3. **Det indgående klip var ikke kommet i fart endnu.** Klippene starter ikke
+   ved fuld fart — de holder fotoet et øjeblik, vinder op, og kører så. Derfor
+   måles nu *to* punkter: hvor kameraet er **i fart** (45 % af klippets eget
+   maksimum), som er hvor der klippes ind, og hvor det er **dødt** (18 %), som
+   er hvor der klippes ud.
+
+**Sorte kanter.** Punkt 1 indførte en fejl som testen fangede: `pull` og
+`pullback` slutter med et zoom omkring 1,0, så en overskridelse driver zoomet
+*under* 1,0 — og så bliver beskæringsrammen større end fotoet bag den. Op til
+47 px sort kant. Zoomet er nu begrænset i begge ender (`Math.max(1, …)`), og
+det er dét der gør sorte kanter umulige frem for blot usandsynlige. Testen
+gennemløber hvert klip, hvert format og hvert tidspunkt op til overskridelsens
+loft; værste overskridelse er 0,0000 px.
+
 ### Nødvendige miljøvariabler i Vercel
 
 | Variabel | Bruges til |

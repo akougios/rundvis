@@ -146,7 +146,12 @@ function buildPlate(img, outW, outH) {
 // no projection maths, no search, nothing to get wrong.
 function shotRectAt(spec, plateW, plateH, outAspect, t) {
   const e = easeShot(t, spec.ease);
-  const z = spec.zFrom + (spec.zTo - spec.zFrom) * e;
+  // Bounded at BOTH ends, because e can exceed 1 while this shot fades out under the next one.
+  // The floor is the one that matters: a pull or pullback ends near 1.0, so overshooting drives
+  // the zoom BELOW 1 - the crop rectangle grows larger than the photo behind it and the frame
+  // fills with black at the edges. Held at 1 or above, the rectangle is always inside the plate,
+  // which is what makes black edges impossible rather than merely unlikely.
+  const z = Math.min(KB_MAX_ZOOM, Math.max(1, spec.zFrom + (spec.zTo - spec.zFrom) * e));
   const base = coverRect(plateW, plateH, outAspect);
   const rw = base.w / z, rh = base.h / z;
   const slackX = Math.max(0, plateW - rw), slackY = Math.max(0, plateH - rh);
@@ -181,8 +186,10 @@ function drawShot2D(octx, W, H, shot, t) {
   octx.drawImage(shot.plate.canvas, r.x, r.y, r.w, r.h, 0, 0, W, H);
 }
 
-// Keeps the generated clips lined up with the edit: the shot on screen plays, everything else
-// is paused on its last frame (which is what a dissolve needs underneath it).
+// Keeps the generated clips lined up with the edit: the shot on screen plays, and so does the one
+// fading out underneath it. Pausing the outgoing clip was the video half of the same mistake as
+// parking the outgoing 2D frame - it turned every dissolve into a still image crossfading into a
+// clip that had not started moving yet.
 //
 // The clips are played rather than seeked frame by frame - seeking every frame stutters badly.
 // A resync only happens when playback has drifted more than about a third of a second, which in
@@ -192,20 +199,6 @@ function drawShot2D(octx, W, H, shot, t) {
 // deliberate twice over: it matches the pacing measured in the reference films, AND the opening
 // seconds are where an image-to-video model stays closest to the photograph it was given, since
 // drift grows the longer a clip runs. Using the head of each clip buys both at once.
-// Where in a generated clip to start playing it.
-//
-// A clip is five seconds; a shot in the tight middle of the film holds for under two. Played from
-// the head, those shots show the part where the model is still easing into the move - the least
-// motion in the clip, which is the opposite of what was paid for.
-//
-// But the head is also the SAFEST part. Luma pins the uploaded photo to frame 0, so the clip
-// starts as the photograph exactly and drifts from it as it goes. Jumping to the middle would
-// show more movement and less of the actual property, and the property is the whole point.
-//
-// So: skip ahead only when most of the clip would otherwise go unseen, by a fraction of the
-// unused part, capped at one second. That clears the ease-in while staying well inside the
-// stretch where the room is still the room. Long shots - the opening and closing above all -
-// start at zero and open on the photograph untouched.
 // Where in the clip this shot starts playing. Measured, not guessed: buildEditPlan has already
 // fitted the hold to the clip's moving part and recorded where that part begins.
 //
@@ -223,16 +216,20 @@ function clipStartFor(shot) {
   return Math.max(0, Math.min(want, clip - hold));
 }
 
-function syncShowVideos(shots, idx, localMs) {
+function syncShowVideos(shots, idx, localMs, prevIdx) {
   for (let i = 0; i < shots.length; i++) {
     const v = shots[i].video;
     if (!v) continue;
-    if (i !== idx) {
+    const outgoing = prevIdx === i && i !== idx;
+    if (i !== idx && !outgoing) {
       if (!v.paused) v.pause();
       continue;
     }
-    const from = clipStartFor(shots[i]);
-    const want = Math.min(from + localMs / 1000, Math.max(0, (v.duration || 99) - 0.05));
+    const shot = shots[i];
+    const from = clipStartFor(shot);
+    // The outgoing clip carries on from where its shot ended, for as long as the dissolve lasts.
+    const into = outgoing ? shot.spec.durationMs + localMs : localMs;
+    const want = Math.min(from + into / 1000, Math.max(0, (v.duration || 99) - 0.05));
     try {
       if (v.paused) {
         v.currentTime = want;
@@ -260,7 +257,20 @@ const SHOT_EASES = {
   ramp: (t) => 0.35 * t + 0.65 * Math.pow(t, 2.2),
   settle: (t) => 0.55 * t + 0.45 * (1 - Math.pow(1 - t, 2)),
 };
-function easeShot(t, kind) { return (SHOT_EASES[kind] || SHOT_EASES.glide)(clamp01(t)); }
+// t may run PAST 1. A shot stays on screen under the dissolve that replaces it, and clamping
+// there parked it on its last frame for the whole crossfade - the exact standstill the curves
+// above were shaped to avoid, reintroduced one line later. Past the end the curve continues in a
+// straight line at the speed it finished with, so the outgoing picture is still travelling while
+// it fades out. Capped, because a long dissolve should not send the frame somewhere the shot was
+// never framed for.
+const EASE_OVERSHOOT_MAX = 1.3;
+function easeShot(t, kind) {
+  const f = SHOT_EASES[kind] || SHOT_EASES.glide;
+  if (t <= 1) return f(Math.max(0, t));
+  const h = 1e-3;
+  const endSpeed = (f(1) - f(1 - h)) / h;
+  return f(1) + endSpeed * (Math.min(t, EASE_OVERSHOOT_MAX) - 1);
+}
 
 function loadImageEl(src) {
   return new Promise((resolve, reject) => {
@@ -454,7 +464,9 @@ function buildEditPlan(count, clipMotion) {
     // Fit the shot to the clip's MOVING part, not to its duration.
     let useClip = true, clipStart = 0;
     const m = motionAt(i);
-    if (m) {
+    // isFinite guards the arithmetic below: a malformed measurement would otherwise turn the
+    // shot's duration into NaN, and one NaN duration takes down the whole timeline.
+    if (m && isFinite(m.moving) && isFinite(m.start)) {
       const movingBeats = Math.floor(((m.moving * 1000) / BEAT_MS) * 2) / 2;
       if (movingBeats < nBeats * CLIP_MIN_COVERAGE) {
         // The clip stops too early to carry this shot. Keep the arc, show the 2D move instead.
@@ -625,7 +637,8 @@ function composeShowFrame(octx, W, H, shots, tMs, opts) {
   const fade = shot.spec.transitionMs || 0;
 
   // Done here rather than by each caller, so the preview and the export stay in lockstep.
-  syncShowVideos(shots, idx, local);
+  const fadeNow = (shot.spec.transitionMs || 0) > 0 && local < (shot.spec.transitionMs || 0) && shots.length > 1;
+  syncShowVideos(shots, idx, local, fadeNow ? (idx - 1 + shots.length) % shots.length : -1);
 
   octx.globalAlpha = 1;
   // Contrast and saturation ride on the draw itself, so a dissolve grades both shots identically
@@ -634,7 +647,9 @@ function composeShowFrame(octx, W, H, shots, tMs, opts) {
   if (fade > 0 && local < fade && shots.length > 1) {
     // Hold the outgoing shot underneath at its final frame and bring this one up over it.
     const prev = shots[(idx - 1 + shots.length) % shots.length];
-    drawShot2D(octx, W, H, prev, 1);
+    // Carried on past its own end rather than held at its last frame, so the picture underneath
+    // is still moving while this one comes up over it.
+    drawShot2D(octx, W, H, prev, 1 + local / Math.max(1, prev.spec.durationMs));
     octx.globalAlpha = clamp01(local / fade);
   }
   drawShot2D(octx, W, H, shot, local / shot.spec.durationMs);
@@ -828,13 +843,29 @@ async function measureClipMotion(v) {
   }
   if (samples.length < 2) return null;
 
-  const peak = samples.reduce((m, s) => Math.max(m, s.d), 0);
-  // Below this the picture is only carrying compression noise, not a camera.
-  const thresh = Math.max(0.6, peak * 0.18);
-  const live = samples.filter((s) => s.d >= thresh);
-  if (!live.length) return { start: 0, moving: 0, dur };
-  const start = Math.max(0, live[0].t - STEP);
-  const end = Math.min(dur, live[live.length - 1].t + STEP);
+  // Smoothed over three samples, so one noisy frame cannot decide where the move begins.
+  const sm = samples.map((s, i) => {
+    const a = samples[Math.max(0, i - 1)].d, b = s.d, c = samples[Math.min(samples.length - 1, i + 1)].d;
+    return { t: s.t, d: (a + b + c) / 3 };
+  });
+  const peak = sm.reduce((m, s) => Math.max(m, s.d), 0);
+  // Two different questions, so two different thresholds.
+  //
+  // AT PACE decides where to cut in. These clips do not start at speed: they hold the photograph
+  // for a moment, wind up, and then travel. Cutting in at the first flicker of movement therefore
+  // lands on the wind-up, and the film cuts from a shot travelling at full speed to one that is
+  // barely moving - which reads as a stumble even though both shots are fine on their own.
+  // Landing where the camera is already at pace is what makes the two sides of a cut match.
+  //
+  // DEAD is the other end: below it the picture is only carrying compression noise.
+  const atPace = peak * 0.45;
+  const dead = Math.max(0.6, peak * 0.18);
+  const first = sm.find((s) => s.d >= atPace);
+  if (!first) return { start: 0, moving: 0, dur };
+  let last = sm[sm.length - 1];
+  for (let i = sm.length - 1; i >= 0; i--) { if (sm[i].d >= dead) { last = sm[i]; break; } }
+  const start = Math.max(0, Math.min(first.t, dur));
+  const end = Math.min(dur, last.t + STEP);
   return { start, moving: Math.max(0, end - start), dur };
 }
 
