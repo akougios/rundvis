@@ -918,6 +918,36 @@ function Rundvis() {
     });
   };
 
+  // Reordering from the video page. The photo, its generated clip and the source list are moved
+  // together: a clip the agent has already paid for must follow its photo rather than being
+  // thrown away or, worse, ending up under a different room.
+  // How many rooms still have no generated clip. Drives both the price shown on step 2 and
+  // whether there is anything left to buy.
+  const hqMissing = flythroughStills.filter((_, i) => !(hqClips && hqClips[i])).length;
+
+  const swap = (arr, a, b) => { const n = [...arr]; [n[a], n[b]] = [n[b], n[a]]; return n; };
+  const moveShot = (idx, dir) => {
+    const target = idx + dir;
+    if (target < 0 || target >= flythroughStills.length) return;
+    setFlythroughStills((prev) => swap(prev, idx, target));
+    setHqClips((prev) => (prev ? swap(prev, idx, target) : prev));
+    setImages((prev) => (target < prev.length ? swap(prev, idx, target) : prev));
+    // The finished file no longer matches what is on screen.
+    setExportFile((prev) => { if (prev) URL.revokeObjectURL(prev.url); return null; });
+    setExportStatus("idle");
+  };
+
+  // Same reasoning for removing a shot: drop the photo and its clip together.
+  const removeShot = (idx) => {
+    if (flythroughStills.length <= 2) return; // a walkthrough needs at least two shots
+    const drop = (arr) => arr.filter((_, i) => i !== idx);
+    setFlythroughStills(drop);
+    setHqClips((prev) => (prev ? drop(prev) : prev));
+    setImages((prev) => (idx < prev.length ? drop(prev) : prev));
+    setExportFile((prev) => { if (prev) URL.revokeObjectURL(prev.url); return null; });
+    setExportStatus("idle");
+  };
+
   const generateScript = async () => {
     setGenerating(true); setGenError("");
     try {
@@ -1235,15 +1265,17 @@ function Rundvis() {
   // price of three whole properties.
   const runHighQuality = async (onlyIndexes) => {
     if (hqStatus === "working" || flythroughStills.length === 0) return;
-    const indexes = onlyIndexes || flythroughStills.map((_, i) => i);
+    // Clips already produced are already paid for, so a full run only covers what is missing -
+    // the room used for the test is not generated and billed a second time.
+    const clips = hqClips ? hqClips.slice() : new Array(flythroughStills.length).fill(null);
+    while (clips.length < flythroughStills.length) clips.push(null);
+    const indexes = onlyIndexes || flythroughStills.map((_, i) => i).filter((i) => !clips[i]);
+    if (indexes.length === 0) return;
+
     setHqStatus("working");
     setHqError("");
     setExportStatus("idle");
     setExportFile((prev) => { if (prev) URL.revokeObjectURL(prev.url); return null; });
-
-    // Keep clips we already paid for unless this is a full run.
-    const clips = onlyIndexes && hqClips ? hqClips.slice() : new Array(flythroughStills.length).fill(null);
-    if (!onlyIndexes) setHqClips(null);
     try {
       let done = 0;
       setHqProgress({ current: 0, total: indexes.length, phase: "generate" });
@@ -1604,87 +1636,177 @@ function Rundvis() {
               )}
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
-                <div className="flex items-center gap-4 mb-4">
-                  <button onClick={regenerateFlythrough} className="flex items-center gap-1.5 text-xs" style={{ color: MUTED }}>
-                    <Icon name="rotate" size={12} /> Generér forfra
-                  </button>
-                  <span className="text-[10px]" style={{ color: MUTED }}>
-                    {EXPORT_FORMATS[previewFormat].where}
-                  </span>
+                <div className="mb-5">
+                  <p className="text-[11px] mb-2" style={{ color: MUTED }}>
+                    Rækkefølge — videoen opdaterer sig med det samme
+                  </p>
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {flythroughStills.map((src, i) => (
+                      <div key={i} className="shrink-0 relative group" style={{ width: 92 }}>
+                        <div className="rounded-md overflow-hidden" style={{ height: 62, border: `1px solid ${LINE}` }}>
+                          <img src={src} alt="" className="w-full h-full object-cover" />
+                        </div>
+                        {hqClips && hqClips[i] && (
+                          <span
+                            className="absolute top-1 right-1 rounded-full px-1.5 text-[9px]"
+                            style={{ backgroundColor: ACCENT, color: "#fff" }}
+                            title="Opgraderet klip"
+                          >
+                            HD
+                          </span>
+                        )}
+                        <div className="flex items-center justify-between mt-1">
+                          <button
+                            onClick={() => moveShot(i, -1)}
+                            disabled={i === 0}
+                            className="px-1.5 py-0.5 rounded text-[11px]"
+                            style={{ color: i === 0 ? LINE : MUTED, cursor: i === 0 ? "default" : "pointer" }}
+                            aria-label="Flyt tidligere"
+                          >
+                            ←
+                          </button>
+                          <span className="text-[10px]" style={{ color: MUTED }}>{i + 1}</span>
+                          <button
+                            onClick={() => moveShot(i, 1)}
+                            disabled={i === flythroughStills.length - 1}
+                            className="px-1.5 py-0.5 rounded text-[11px]"
+                            style={{
+                              color: i === flythroughStills.length - 1 ? LINE : MUTED,
+                              cursor: i === flythroughStills.length - 1 ? "default" : "pointer",
+                            }}
+                            aria-label="Flyt senere"
+                          >
+                            →
+                          </button>
+                        </div>
+                        {flythroughStills.length > 2 && (
+                          <button
+                            onClick={() => removeShot(i)}
+                            className="w-full text-[10px] mt-0.5"
+                            style={{ color: MUTED }}
+                          >
+                            Fjern
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="mb-5 p-4 rounded-xl" style={{ backgroundColor: SURFACE_2, border: `1px solid ${LINE}` }}>
                   <p className="text-sm mb-1" style={{ color: TEXT }}>Opgradér: ægte kamerabevægelse</p>
-                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>
-                    Hvert billede bliver til et klip hvor kameraet faktisk bevæger sig i rummet. Samme klipning, samme formater.
+                  <p className="text-[11px] mb-4" style={{ color: MUTED }}>
+                    Hvert billede bliver til et klip hvor kameraet faktisk bevæger sig i rummet.
+                    Samme klipning og formater som nu.
                   </p>
 
                   {hqStatus !== "working" && (
-                    <div className="mb-3">
-                      <p className="text-[11px] mb-1.5" style={{ color: MUTED }}>Kvalitet</p>
-                      <div className="flex flex-wrap gap-2">
+                    <div className="space-y-4">
+                      {/* Step 1 — prove it on one room before paying for the property. */}
+                      <div className="flex gap-3">
+                        <span
+                          className="shrink-0 flex items-center justify-center rounded-full text-[11px] font-medium"
+                          style={{ width: 22, height: 22, backgroundColor: hqClips ? ACCENT : SURFACE, border: `1px solid ${hqClips ? ACCENT : LINE}`, color: hqClips ? "#fff" : MUTED }}
+                        >
+                          {hqClips ? "✓" : "1"}
+                        </span>
+                        <div className="flex-1">
+                          <p className="text-xs mb-1" style={{ color: TEXT }}>Prøv det på ét rum</p>
+                          <p className="text-[11px] mb-2" style={{ color: MUTED }}>
+                            Se resultatet på dine egne billeder for ~{QUALITIES[hqQuality].usd.toFixed(2)} $, før du bruger mere.
+                          </p>
+                          {flythroughStills.length > 1 && (
+                            <div className="flex gap-2 overflow-x-auto pb-1 mb-2">
+                              {flythroughStills.map((src, i) => (
+                                <button
+                                  key={i}
+                                  onClick={() => setCompareIndex(i)}
+                                  className="shrink-0 rounded-md overflow-hidden"
+                                  style={{
+                                    width: 56, height: 38,
+                                    border: `2px solid ${compareIndex === i ? ACCENT : "transparent"}`,
+                                    opacity: compareIndex === i ? 1 : 0.5,
+                                  }}
+                                >
+                                  <img src={src} alt="" className="w-full h-full object-cover" />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {hqClips && hqClips[compareIndex] ? (
+                            <p className="text-[11px]" style={{ color: TEXT }}>
+                              <Icon name="check" size={11} /> Dette rum er klar — se det i afspilleren, eller vælg et andet.
+                            </p>
+                          ) : (
+                            <button
+                              onClick={() => runHighQuality([compareIndex])}
+                              className="flex items-center gap-2 px-4 py-2 rounded-full text-sm"
+                              style={{ border: `1px solid ${ACCENT}`, color: ACCENT }}
+                            >
+                              <Icon name="film" size={14} /> Prøv dette rum
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Step 2 — the rest of the property, with the price stated before the click. */}
+                      <div className="flex gap-3" style={{ opacity: hqClips ? 1 : 0.55 }}>
+                        <span
+                          className="shrink-0 flex items-center justify-center rounded-full text-[11px] font-medium"
+                          style={{
+                            width: 22, height: 22,
+                            backgroundColor: hqMissing === 0 ? ACCENT : SURFACE,
+                            border: `1px solid ${hqMissing === 0 ? ACCENT : LINE}`,
+                            color: hqMissing === 0 ? "#fff" : MUTED,
+                          }}
+                        >
+                          {hqMissing === 0 ? "✓" : "2"}
+                        </span>
+                        <div className="flex-1">
+                          <p className="text-xs mb-1" style={{ color: TEXT }}>Opgradér resten af videoen</p>
+                          {hqMissing === 0 ? (
+                            <p className="text-[11px]" style={{ color: MUTED }}>
+                              Alle billeder har et klip. Hent videoen nedenfor.
+                            </p>
+                          ) : (
+                            <>
+                              <p className="text-[11px] mb-2" style={{ color: MUTED }}>
+                                {`${hqMissing} ${hqMissing === 1 ? "billede mangler" : "billeder mangler"} · ca. ${(QUALITIES[hqQuality].usd * hqMissing).toFixed(2)} $ · omkring ${Math.max(2, Math.ceil((hqMissing / HQ_CONCURRENCY) * 2))} minutter`}
+                              </p>
+                              <button
+                                onClick={() => runHighQuality()}
+                                className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium"
+                                style={{ backgroundColor: ACCENT, color: "#fff" }}
+                              >
+                                <Icon name="sparkles" size={14} /> Opgradér resten
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-1">
+                        <span className="text-[11px]" style={{ color: MUTED }}>Kvalitet</span>
                         {Object.entries(QUALITIES).map(([k, q]) => {
                           const on = hqQuality === k;
                           return (
                             <button
                               key={k}
                               onClick={() => setHqQuality(k)}
-                              className="px-3 py-1.5 rounded-full text-xs whitespace-nowrap"
+                              className="px-2.5 py-1 rounded-full text-[11px]"
                               style={{
                                 border: `1px solid ${on ? ACCENT : LINE}`,
                                 backgroundColor: on ? ACCENT : "transparent",
                                 color: on ? "#fff" : MUTED,
                               }}
                             >
-                              {q.label} <span style={{ opacity: 0.75 }}>~{q.usd.toFixed(2)} $/klip</span>
+                              {q.label} ~{q.usd.toFixed(2)} $
                             </button>
                           );
                         })}
                       </div>
-                    </div>
-                  )}
-
-                  {hqStatus !== "working" && flythroughStills.length > 1 && (
-                    <div className="mb-3">
-                      <p className="text-[11px] mb-1.5" style={{ color: MUTED }}>Testbillede — vælg et rum</p>
-                      <div className="flex gap-2 overflow-x-auto pb-1">
-                        {flythroughStills.map((src, i) => (
-                          <button
-                            key={i}
-                            onClick={() => setCompareIndex(i)}
-                            className="shrink-0 rounded-md overflow-hidden"
-                            style={{
-                              width: 64, height: 44,
-                              border: `2px solid ${compareIndex === i ? ACCENT : "transparent"}`,
-                              opacity: compareIndex === i ? 1 : 0.55,
-                            }}
-                          >
-                            <img src={src} alt="" className="w-full h-full object-cover" />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {hqStatus !== "working" && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        onClick={() => runHighQuality([compareIndex])}
-                        className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium"
-                        style={{ border: `1px solid ${ACCENT}`, color: ACCENT }}
-                      >
-                        <Icon name="film" size={14} /> Prøv ét billede
-                      </button>
-                      <button
-                        onClick={() => runHighQuality()}
-                        className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium"
-                        style={{ backgroundColor: ACCENT, color: "#fff" }}
-                      >
-                        <Icon name="sparkles" size={14} />
-                        Opgradér hele videoen
-                      </button>
                     </div>
                   )}
 
