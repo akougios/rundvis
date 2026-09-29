@@ -23,6 +23,12 @@ export default async function handler(req, res) {
     // Several clips are submitted at once so a whole property finishes in minutes rather than
     // half an hour, and a burst is exactly what gets rate-limited. A 429 is therefore an expected
     // part of normal operation here, not something to hand the agent.
+    //
+    // Only a couple of quick retries happen here. This function runs under a serverless time
+    // limit measured in seconds, so it cannot sit and wait out a limit on *concurrent*
+    // generations - that kind of 429 persists until an earlier clip finishes, minutes later.
+    // Waiting that long is the browser's job, so a persistent 429 is handed back marked
+    // retryable and the page keeps trying (see runHighQuality in public/index.html).
     let r, text;
     for (let attempt = 0; ; attempt++) {
       r = await fetch(LUMA_BASE, {
@@ -31,10 +37,10 @@ export default async function handler(req, res) {
         body,
       });
       text = await r.text();
-      if (r.status !== 429 || attempt >= 4) break;
+      if (r.status !== 429 || attempt >= 1) break;
       const after = Number(r.headers.get("retry-after"));
-      const wait = Number.isFinite(after) && after > 0 ? after * 1000 : 2000 * Math.pow(2, attempt);
-      await new Promise((done) => setTimeout(done, Math.min(wait, 20000)));
+      const wait = Number.isFinite(after) && after > 0 ? after * 1000 : 1500;
+      await new Promise((done) => setTimeout(done, Math.min(wait, 3000)));
     }
 
     let data;
@@ -47,7 +53,13 @@ export default async function handler(req, res) {
       const detail = raw == null || raw === ""
         ? (text.slice(0, 300) || explainStatus(r.status))
         : (typeof raw === "string" ? raw : JSON.stringify(raw).slice(0, 300));
-      res.status(r.status).json({ error: `Luma afviste kaldet (HTTP ${r.status}): ${detail}` });
+      const after = Number(r.headers.get("retry-after"));
+      res.status(r.status).json({
+        error: `Luma afviste kaldet (HTTP ${r.status}): ${detail}`,
+        // The page waits this one out rather than reporting it: see the comment on the retry loop.
+        retryable: r.status === 429,
+        retryAfter: Number.isFinite(after) && after > 0 ? after : null,
+      });
       return;
     }
 

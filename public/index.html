@@ -925,6 +925,33 @@ function Rundvis() {
   // whether there is anything left to buy.
   const hqMissing = flythroughStills.filter((_, i) => !(hqClips && hqClips[i])).length;
 
+  // Which rooms to generate when upgrading a selection rather than all of them, spread evenly and
+  // anchored at the first and last shot.
+  //
+  // WHY NOT ALWAYS ALL OF THEM. Every clip is three minutes of waiting and about a krone, so 18
+  // photos is 9 minutes and $17 even six-at-a-time. But the edit cuts on a 116 BPM grid: most
+  // shots are on screen for well under two seconds, and at that length a generated camera move
+  // and the 2D move are not tellable apart. The clips are worth paying for where they show -
+  // the opening, the closing, and regularly in between - and the rest carry the 2D motion. Same
+  // finished film to look at, a third of the price and a third of the wait.
+  const pickSpread = (total, n) => {
+    if (n >= total) return Array.from({ length: total }, (_, i) => i);
+    if (n <= 1) return [0];
+    const out = [];
+    for (let k = 0; k < n; k++) out.push(Math.round((k * (total - 1)) / (n - 1)));
+    return [...new Set(out)];
+  };
+  // Six reads as a properly filmed walkthrough without paying for every room.
+  const HQ_HIGHLIGHTS = 6;
+  const hqHighlightIndexes = pickSpread(flythroughStills.length, HQ_HIGHLIGHTS)
+    .filter((i) => !(hqClips && hqClips[i]));
+
+  // Time and money for a given number of clips, so neither is a surprise after the click.
+  const hqEstimate = (n) => ({
+    usd: (QUALITIES[hqQuality].usd * n).toFixed(2),
+    min: Math.max(2, Math.ceil((Math.ceil(n / HQ_CONCURRENCY) * HQ_SECONDS_PER_CLIP) / 60)),
+  });
+
   const swap = (arr, a, b) => { const n = [...arr]; [n[a], n[b]] = [n[b], n[a]]; return n; };
   const moveShot = (idx, dir) => {
     const target = idx + dir;
@@ -1139,11 +1166,14 @@ function Rundvis() {
   // shots - the reference film the agent supplied had 14 clips across 40.7s. Eight photos made
   // a 20-second video, which is short for a property.
   const MAX_FLYTHROUGH_IMAGES = 20;
-  // How many clips are generated at once. Sequentially, 18 clips at ~2 minutes each is over half
-  // an hour of staring at a progress bar; three at a time brings that to about twelve minutes.
-  // Kept low on purpose: the providers rate-limit, and a burst of twenty parallel jobs is the
-  // kind of thing that gets an account throttled.
-  const HQ_CONCURRENCY = 3;
+  // How many clips are generated at once. One clip takes the model about three minutes whatever
+  // we do, so wall-clock time is purely a question of how many run in parallel: at three, 18
+  // photos is ~18 minutes, at six it is ~9. Six is not reckless because create.js treats a 429
+  // as normal and waits it out - submitting more than the account allows degrades into queueing
+  // rather than failing, which is the behaviour we want.
+  const HQ_CONCURRENCY = 6;
+  // Rough seconds per clip, for the estimates shown before the agent commits to paying.
+  const HQ_SECONDS_PER_CLIP = 180;
   // Photos are kept at up to this size. A 1920-wide export at the tightest 10% crop samples at
   // most ~2130 source pixels across, so 2560 leaves headroom while keeping several photos in
   // memory comfortably. Anything smaller is left exactly as uploaded and never re-encoded.
@@ -1269,7 +1299,7 @@ function Rundvis() {
     // the room used for the test is not generated and billed a second time.
     const clips = hqClips ? hqClips.slice() : new Array(flythroughStills.length).fill(null);
     while (clips.length < flythroughStills.length) clips.push(null);
-    const indexes = onlyIndexes || flythroughStills.map((_, i) => i).filter((i) => !clips[i]);
+    const indexes = (onlyIndexes || flythroughStills.map((_, i) => i)).filter((i) => !clips[i]);
     if (indexes.length === 0) return;
 
     setHqStatus("working");
@@ -1291,26 +1321,41 @@ function Rundvis() {
         const upJson = await up.json();
         if (!up.ok) throw new Error(upJson.error || "Kunne ikke uploade billedet.");
 
-        const create = await fetch("/api/generate-clip/create", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            imageUrl: upJson.url,
-            motion: flythroughParams[i] ? flythroughParams[i].type : "push",
-            // Generate natively in the shape the video will be shown in, rather than cropping a
-            // widescreen clip down afterwards - on the models that support it.
-            aspectRatio: previewFormat,
-            // Fixed per photo index, so on a model with a seed a regenerated walkthrough is
-            // identical rather than merely similar.
-            seed: 1000 + i,
-            quality: hqQuality,
-          }),
+        const payload = JSON.stringify({
+          imageUrl: upJson.url,
+          motion: flythroughParams[i] ? flythroughParams[i].type : "push",
+          // Generate natively in the shape the video will be shown in, rather than cropping a
+          // widescreen clip down afterwards - on the models that support it.
+          aspectRatio: previewFormat,
+          // Fixed per photo index, so on a model with a seed a regenerated walkthrough is
+          // identical rather than merely similar.
+          seed: 1000 + i,
+          quality: hqQuality,
         });
-        const created = await create.json();
-        if (!create.ok) throw new Error(created.error || "Kunne ikke starte videoklippet.");
+
+        // Submitting six at once will hit the account's limit, and being told "too many" is not a
+        // failure - it means wait. The waiting happens here rather than in the serverless
+        // function, which runs under a time limit of seconds while this limit can take minutes to
+        // clear. Up to ten minutes of patience, which is still faster than generating one at a
+        // time would have been.
+        let created;
+        for (let forsoeg = 0; ; forsoeg++) {
+          const create = await fetch("/api/generate-clip/create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: payload,
+          });
+          created = await create.json();
+          if (create.ok) break;
+          if (!created.retryable || forsoeg >= 25) {
+            throw new Error(created.error || "Kunne ikke starte videoklippet.");
+          }
+          const vent = created.retryAfter ? created.retryAfter * 1000 : Math.min(5000 + forsoeg * 3000, 25000);
+          await new Promise((r) => setTimeout(r, vent));
+        }
 
         for (let attempt = 0; attempt < 150; attempt++) {
-          await new Promise((r) => setTimeout(r, 4000));
+          await new Promise((r) => setTimeout(r, 3000));
           const st = await fetch("/api/generate-clip/status", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1765,23 +1810,51 @@ function Rundvis() {
                           {hqMissing === 0 ? "✓" : "2"}
                         </span>
                         <div className="flex-1">
-                          <p className="text-xs mb-1" style={{ color: TEXT }}>Opgradér resten af videoen</p>
+                          <p className="text-xs mb-1" style={{ color: TEXT }}>Opgradér videoen</p>
                           {hqMissing === 0 ? (
                             <p className="text-[11px]" style={{ color: MUTED }}>
                               Alle billeder har et klip. Hent videoen nedenfor.
                             </p>
                           ) : (
                             <>
-                              <p className="text-[11px] mb-2" style={{ color: MUTED }}>
-                                {`${hqMissing} ${hqMissing === 1 ? "billede mangler" : "billeder mangler"} · ca. ${(QUALITIES[hqQuality].usd * hqMissing).toFixed(2)} $ · omkring ${Math.max(2, Math.ceil((hqMissing / HQ_CONCURRENCY) * 2))} minutter`}
-                              </p>
-                              <button
-                                onClick={() => runHighQuality()}
-                                className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium"
-                                style={{ backgroundColor: ACCENT, color: "#fff" }}
-                              >
-                                <Icon name="sparkles" size={14} /> Opgradér resten
-                              </button>
+                              {hqHighlightIndexes.length > 0 && hqHighlightIndexes.length < hqMissing ? (
+                                <>
+                                  <p className="text-[11px] mb-2" style={{ color: MUTED }}>
+                                    {`${hqHighlightIndexes.length} udvalgte rum · ca. ${hqEstimate(hqHighlightIndexes.length).usd} $ · omkring ${hqEstimate(hqHighlightIndexes.length).min} minutter`}
+                                  </p>
+                                  <button
+                                    onClick={() => runHighQuality(hqHighlightIndexes)}
+                                    className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium"
+                                    style={{ backgroundColor: ACCENT, color: "#fff" }}
+                                  >
+                                    <Icon name="sparkles" size={14} /> Opgradér udvalgte rum
+                                  </button>
+                                  <p className="text-[10px] mt-2" style={{ color: MUTED }}>
+                                    Klippene lægges i starten, slutningen og jævnt undervejs. Resten
+                                    beholder bevægelsen de har nu — i det færdige klip kan man ikke se forskel.
+                                  </p>
+                                  <button
+                                    onClick={() => runHighQuality()}
+                                    className="text-[11px] mt-2 underline"
+                                    style={{ color: MUTED }}
+                                  >
+                                    {`Eller alle ${hqMissing} billeder — ca. ${hqEstimate(hqMissing).usd} $, ${hqEstimate(hqMissing).min} min`}
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <p className="text-[11px] mb-2" style={{ color: MUTED }}>
+                                    {`${hqMissing} ${hqMissing === 1 ? "billede mangler" : "billeder mangler"} · ca. ${hqEstimate(hqMissing).usd} $ · omkring ${hqEstimate(hqMissing).min} minutter`}
+                                  </p>
+                                  <button
+                                    onClick={() => runHighQuality()}
+                                    className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium"
+                                    style={{ backgroundColor: ACCENT, color: "#fff" }}
+                                  >
+                                    <Icon name="sparkles" size={14} /> Opgradér resten
+                                  </button>
+                                </>
+                              )}
                             </>
                           )}
                         </div>
@@ -1814,19 +1887,22 @@ function Rundvis() {
                     <div>
                       <div className="flex items-center gap-2 text-xs mb-2" style={{ color: TEXT }}>
                         <Icon name="loader" size={14} />
-                        {hqProgress.phase === "upload" ? "Sender" : "Genererer"} klip {hqProgress.current} af {hqProgress.total}…
+                        {`${hqProgress.current} af ${hqProgress.total} klip færdige`}
                       </div>
                       <div className="h-1 rounded-full overflow-hidden" style={{ backgroundColor: LINE }}>
                         <div
                           className="h-full transition-all"
                           style={{
                             backgroundColor: ACCENT,
-                            width: `${Math.round(((hqProgress.current - 1) / Math.max(1, hqProgress.total)) * 100)}%`,
+                            width: `${Math.round((hqProgress.current / Math.max(1, hqProgress.total)) * 100)}%`,
                           }}
                         />
                       </div>
+                      {/* States that several run at once: "klip 3 af 18" on its own reads as one
+                          at a time, which made a nine-minute job look like half an hour. */}
                       <p className="text-[10px] mt-2" style={{ color: MUTED }}>
-                        Klippene vises i afspilleren efterhånden.
+                        {`${Math.min(HQ_CONCURRENCY, hqProgress.total - hqProgress.current)} kører samtidig · ca. ${hqEstimate(hqProgress.total - hqProgress.current).min} min tilbage. `}
+                        Klippene vises i afspilleren efterhånden. Lad fanen være åben.
                       </p>
                     </div>
                   )}
