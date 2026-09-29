@@ -192,6 +192,29 @@ function drawShot2D(octx, W, H, shot, t) {
 // deliberate twice over: it matches the pacing measured in the reference films, AND the opening
 // seconds are where an image-to-video model stays closest to the photograph it was given, since
 // drift grows the longer a clip runs. Using the head of each clip buys both at once.
+// Where in a generated clip to start playing it.
+//
+// A clip is five seconds; a shot in the tight middle of the film holds for under two. Played from
+// the head, those shots show the part where the model is still easing into the move - the least
+// motion in the clip, which is the opposite of what was paid for.
+//
+// But the head is also the SAFEST part. Luma pins the uploaded photo to frame 0, so the clip
+// starts as the photograph exactly and drifts from it as it goes. Jumping to the middle would
+// show more movement and less of the actual property, and the property is the whole point.
+//
+// So: skip ahead only when most of the clip would otherwise go unseen, by a fraction of the
+// unused part, capped at one second. That clears the ease-in while staying well inside the
+// stretch where the room is still the room. Long shots - the opening and closing above all -
+// start at zero and open on the photograph untouched.
+function clipStartFor(shot) {
+  const v = shot.video;
+  const clip = v && isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
+  if (!clip) return 0;
+  const hold = shot.spec.durationMs / 1000;
+  if (hold > clip * 0.6) return 0;
+  return Math.min((clip - hold) * 0.4, 1.0);
+}
+
 function syncShowVideos(shots, idx, localMs) {
   for (let i = 0; i < shots.length; i++) {
     const v = shots[i].video;
@@ -200,7 +223,8 @@ function syncShowVideos(shots, idx, localMs) {
       if (!v.paused) v.pause();
       continue;
     }
-    const want = Math.min(localMs / 1000, Math.max(0, (v.duration || 99) - 0.05));
+    const from = clipStartFor(shots[i]);
+    const want = Math.min(from + localMs / 1000, Math.max(0, (v.duration || 99) - 0.05));
     try {
       if (v.paused) {
         v.currentTime = want;
@@ -1114,27 +1138,6 @@ function Rundvis() {
   // whether there is anything left to buy.
   const hqMissing = flythroughStills.filter((_, i) => !(hqClips && hqClips[i])).length;
 
-  // Which rooms to generate when upgrading a selection rather than all of them, spread evenly and
-  // anchored at the first and last shot.
-  //
-  // WHY NOT ALWAYS ALL OF THEM. Every clip is three minutes of waiting and about a krone, so 18
-  // photos is 9 minutes and $17 even six-at-a-time. But the edit cuts on a 116 BPM grid: most
-  // shots are on screen for well under two seconds, and at that length a generated camera move
-  // and the 2D move are not tellable apart. The clips are worth paying for where they show -
-  // the opening, the closing, and regularly in between - and the rest carry the 2D motion. Same
-  // finished film to look at, a third of the price and a third of the wait.
-  const pickSpread = (total, n) => {
-    if (n >= total) return Array.from({ length: total }, (_, i) => i);
-    if (n <= 1) return [0];
-    const out = [];
-    for (let k = 0; k < n; k++) out.push(Math.round((k * (total - 1)) / (n - 1)));
-    return [...new Set(out)];
-  };
-  // Six reads as a properly filmed walkthrough without paying for every room.
-  const HQ_HIGHLIGHTS = 6;
-  const hqHighlightIndexes = pickSpread(flythroughStills.length, HQ_HIGHLIGHTS)
-    .filter((i) => !(hqClips && hqClips[i]));
-
   // Time and money for a given number of clips, so neither is a surprise after the click.
   const hqEstimate = (n) => ({
     usd: (QUALITIES[hqQuality].usd * n).toFixed(2),
@@ -1474,6 +1477,48 @@ function Rundvis() {
     () => buildEditPlan(flythroughStills.length),
     [flythroughStills.length]
   );
+
+  // WHICH ROOMS TO PAY FOR, when upgrading a selection rather than all of them.
+  //
+  // WHY NOT ALL. Every clip is three minutes of waiting and about a krone, so 18 photos is 9
+  // minutes and $17 even six-at-a-time. Most shots are on screen for under two seconds, and at
+  // that length a generated camera move and the 2D move are not tellable apart.
+  //
+  // HOW THEY ARE CHOSEN, and an honest note on it. The theory was that spreading clips evenly by
+  // position wasted money, because the tempo arc makes the middle shots the shortest. Measured,
+  // that turned out to be worth almost nothing: for 18 photos both rules put the six clips under
+  // 39% of the running time, because an even spread already catches the long opening and closing
+  // shots. This rule is kept because picking the longest shot within each stretch is never worse
+  // and avoids the odd case where an evenly-spaced index lands on the briefest shot around it -
+  // but it is a refinement, not the fix. The real waste is that a clip is five seconds and most
+  // shots are under three; closing that means shorter generations or longer holds on the shots
+  // that carry one.
+  //
+  // The film is split into as many segments as there are clips to spend, and the longest-held
+  // shot in each segment gets one. Ranking purely by length was tried first and bunched the
+  // clips at the two ends, because the tempo arc makes the end shots the longest - it left the
+  // middle third of a 42-second film with no generated motion at all. Segmenting spreads them
+  // across the running time and still picks the shot in each stretch that is on screen longest.
+  const HQ_HIGHLIGHTS = 6;
+  const hqHighlightIndexes = useMemo(() => {
+    const total = flythroughParams.length;
+    if (total === 0) return [];
+    const free = (i) => !(hqClips && hqClips[i]);
+    if (total <= HQ_HIGHLIGHTS) return flythroughParams.map((_, i) => i).filter(free);
+
+    const out = [];
+    for (let seg = 0; seg < HQ_HIGHLIGHTS; seg++) {
+      const from = Math.floor((seg * total) / HQ_HIGHLIGHTS);
+      const to = Math.floor(((seg + 1) * total) / HQ_HIGHLIGHTS);
+      let best = -1;
+      for (let i = from; i < to; i++) {
+        if (!free(i)) continue;
+        if (best === -1 || flythroughParams[i].durationMs > flythroughParams[best].durationMs) best = i;
+      }
+      if (best !== -1) out.push(best);
+    }
+    return out;
+  }, [flythroughParams, hqClips]);
 
   // ---- High-quality pass ----
   // Sends every photo to the video model and collects the finished clips. Sequential on purpose:
