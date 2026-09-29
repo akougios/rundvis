@@ -158,10 +158,24 @@ Beskæring 0–15,8 %; første og sidste klip vises helt ubeskåret.
 
 **2. Høj kvalitet (betalt, valgfrit).** Hvert foto sendes til en
 image-to-video-model, der laver et klip med rigtig kamerabevægelse gennem
-rummet. Kun de første 2–3 sekunder af hvert 5-sekunders klip bruges — dels
-fordi det matcher tempoet i rigtige boligvideoer, dels fordi modellen holder
-sig tættest på originalfotoet i starten og driver længere væk jo længere
-klippet kører.
+rummet. Et klip er 5 sekunder, men de fleste klip står kun 2–3 sekunder på
+skærmen, fordi det matcher tempoet i rigtige boligvideoer.
+
+Hvilken del af klippet der vises, er en afvejning. Luma binder det uploadede
+foto til frame 0, så klippet åbner som fotografiet præcis og driver længere væk
+jo længere det kører: starten er mest tro mod boligen, men også der hvor
+kameraet stadig er ved at komme i gang. Korte klip springer derfor et stykke ind
+— en brøkdel af den ubrugte del, højst ét sekund — så de viser bevægelsen frem
+for optrapningen. Lange klip, åbningen og afslutningen først og fremmest, starter
+ved nul og åbner på fotoet urørt (`clipStartFor`).
+
+Udvælgelsen af hvilke rum der får et klip, når ikke hele boligen opgraderes:
+filmen deles i lige så mange afsnit som der er klip at bruge, og det klip der
+står længst på skærmen i hvert afsnit får et. Målt er det næsten uden betydning
+— både denne og en jævn fordeling efter position lander under 39 % af spilletiden
+ved 18 billeder, fordi en jævn fordeling allerede rammer den lange åbning og
+afslutning. Den er beholdt fordi den aldrig er dårligere, men det egentlige spild
+er at et klip er 5 sekunder og de fleste klip er under 3.
 
 Begge lag deler samme klipning (`buildEditPlan`, `composeShowFrame`):
 beat-gitter på 116 BPM, hårde klip, dissolves, speed ramps, vignette. Det er
@@ -172,28 +186,30 @@ billederne bevæger sig.
 
 | Variabel | Bruges til |
 |---|---|
-| `FAL_KEY` | fal.ai-nøgle til videogenerering. Uden den virker storyboardet stadig; kun "Generér i høj kvalitet" fejler, med en forklarende besked. |
-| `FAL_MODEL_KEY` | Valgfri. Hvilken model der er forvalgt i brugerfladen: `kling-2.6-pro` (standard), `seedance-1-pro` eller `luma-ray2`. Brugeren kan skifte i appen uanset. |
-| `BLOB_READ_WRITE_TOKEN` | Vercel Blob. Videomodellen kræver et offentligt tilgængeligt billede-URL. |
+| `LUMA_API_KEY` | Videogenerering. Uden den virker storyboardet stadig; kun opgraderingen fejler, med en forklarende besked. |
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob. Videomodellen kræver et offentligt tilgængeligt billede-URL. Sættes automatisk når en Blob Store oprettes under Vercel → Storage og forbindes til projektet. |
+| `VIDEO_PROXY_SECRET` | Valgfri. Nøgle til at signere video-URL'er. Falder tilbage til `LUMA_API_KEY` hvis den ikke er sat. |
 
-### Modelvalg
+### Én model, ikke et modelvalg
 
-Der er med vilje ikke valgt én "bedste" model, for de tre adskiller sig på
-måder der først viser sig på rigtige boligfotos:
+Luma Ray 3.2. Fire modeller blev sammenlignet side om side på rigtige boligfotos
+(Kling 2.6 Pro, Seedance 1.0 Pro, Luma Ray 2 og Ray 3.2); Ray 3.2 holdt rummene
+bedst, og de øvrige blev **fjernet** frem for at blive efterladt som valgmuligheder.
+Sammenligningsopstillingen ligger i git-historikken hvis en model skal vurderes igen.
 
-| Model | Pr. klip | Bolig m. 8 rum | Hvorfor den |
-|---|---|---|---|
-| Kling 2.6 Pro | ~0,35 $ (5s) | ~2,80 $ | Stærk troskab mod fotoet, billigst i 1080p. Ingen seed. |
-| Seedance 1.0 Pro | ~0,37 $ (3s) | ~2,98 $ | **Har seed** — samme input giver samme klip, hvilket matcher produktets løfte. Frit valg af længde, så vi kun betaler for de sekunder klipningen bruger. |
-| Luma Ray 2 | ~0,20 $ (5s) | ~1,60 $ | Mest filmisk kamerasprog (dolly, orbit, crane) og billigst. |
+Begrundelsen er ikke teknisk men produktmæssig: et valg mellem modeller som
+ejendomsmægleren ikke har nogen mulighed for at bedømme, er ikke en funktion — det
+er en beslutning skubbet over på brugeren.
 
-Seedance 2.0 rangeres højest på troskab i offentlige sammenligninger, men
-koster 0,68 $/sek. i 1080p — ca. 27 $ for én bolig, hvilket ikke hænger
-sammen med markedets 9–15 $ pr. video.
+| Kvalitet | Opløsning | Pr. klip |
+|---|---|---|
+| Test | 720p | ~0,45 $ |
+| Fuld kvalitet | 1080p | ~0,95 $ |
 
-**De gamle Luma-problemer længere oppe gjaldt to-billed-interpolation**, som
-er en helt anden og sværere opgave end at animere ét billede. De er derfor
-ikke et argument mod Ray 2 her.
+Test findes så et rum kan tjekkes for under det halve: hvis modellen bøjer noget
+i 720p, gør den det også i 1080p.
 
-Brug "Test ét billede" i appen til at sammenligne modellerne på dine egne
-fotos for under en krone pr. model, før du kører en hel bolig.
+Opgraderingen er derfor to trin i appen, i den rækkefølge: **"Prøv det på ét rum"**
+(ét klip, ~0,45 $) før **"Opgradér videoen"** (resten af boligen, med prisen
+skrevet på knappen). Første trin findes for at et rum kan bedømmes på egne fotos,
+før der bliver brugt mere.
