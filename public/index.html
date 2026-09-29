@@ -206,13 +206,21 @@ function drawShot2D(octx, W, H, shot, t) {
 // unused part, capped at one second. That clears the ease-in while staying well inside the
 // stretch where the room is still the room. Long shots - the opening and closing above all -
 // start at zero and open on the photograph untouched.
+// Where in the clip this shot starts playing. Measured, not guessed: buildEditPlan has already
+// fitted the hold to the clip's moving part and recorded where that part begins.
+//
+// The guess this replaces skipped into the clip by a fraction of the unused tail, on the theory
+// that the start was an ease-in worth stepping over. Measuring showed the opposite - these clips
+// come out of the gate moving and ease to a STOP - so that skipped past real motion to sit closer
+// to the dead end.
 function clipStartFor(shot) {
   const v = shot.video;
   const clip = v && isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
   if (!clip) return 0;
   const hold = shot.spec.durationMs / 1000;
-  if (hold > clip * 0.6) return 0;
-  return Math.min((clip - hold) * 0.4, 1.0);
+  const want = shot.spec.clipStart || 0;
+  // Never so far in that the shot outruns the end of the clip.
+  return Math.max(0, Math.min(want, clip - hold));
 }
 
 function syncShowVideos(shots, idx, localMs) {
@@ -334,21 +342,25 @@ function paceBeats(i, count) {
 // remove. Utilisation wins. The arc is intact in the free edit and in the selective upgrade,
 // which is the path the interface steers towards anyway.
 //
-// Capped at 9 beats (4.66s) against a nominal 5-second clip. The obvious cap was 9.5 beats, which
-// uses 98% of the clip - but "5s" is what we ask Luma for, not a guarantee of what comes back, and
-// a shot outlasting its own footage parks on a frozen last frame. That park is the clearest
-// slideshow tell there is, and it would land on exactly the shots that were paid for. The third of
-// a second given up here buys 93% utilisation instead of 98% with nothing to go wrong.
-//
-// Above ~3s the start offset in clipStartFor drops to zero as well, so these shots open on the
-// photograph exactly - the most faithful frame there is.
+// A shot carrying a clip may run longer than its place in the arc, but never longer than the clip
+// actually moves (see measureClipMotion). Capped at 9 beats (4.66s) of a nominal 5-second clip:
+// "5s" is what we ask Luma for, not a guarantee of what comes back, and a shot outlasting its own
+// footage parks on a frozen frame.
 const CLIP_BONUS_BEATS = 2.5;
 const CLIP_MAX_BEATS = 9;
+// A clip is only worth showing if it moves for most of what the shot wants to hold. Below this
+// the free 2D move is the better picture: it moves for the whole shot, every time. Holding the
+// arc and dropping the clip beats shrinking the shot to fit a clip that stops early - which would
+// turn a four-second establishing shot into a one-second flicker.
+const CLIP_MIN_COVERAGE = 0.6;
 
-function buildEditPlan(count, hasClip) {
+// clipMotion(i) -> { start, moving } in seconds, from measureClipMotion, or null when the shot has
+// no clip or it has not been measured yet. Unmeasured is treated as no clip: the shot keeps its
+// arc length and the clip, if any, plays from its start. That is the safe direction to be wrong in.
+function buildEditPlan(count, clipMotion) {
   if (count === 0) return [];
   const beats = (n) => Math.round(n * BEAT_MS);
-  const carries = typeof hasClip === "function" ? hasClip : () => false;
+  const motionAt = typeof clipMotion === "function" ? clipMotion : () => null;
   const plan = [];
 
   const T = KB_TRAVEL;
@@ -439,7 +451,19 @@ function buildEditPlan(count, hasClip) {
       }
     }
 
-    if (carries(i)) nBeats = Math.min(CLIP_MAX_BEATS, nBeats + CLIP_BONUS_BEATS);
+    // Fit the shot to the clip's MOVING part, not to its duration.
+    let useClip = true, clipStart = 0;
+    const m = motionAt(i);
+    if (m) {
+      const movingBeats = Math.floor(((m.moving * 1000) / BEAT_MS) * 2) / 2;
+      if (movingBeats < nBeats * CLIP_MIN_COVERAGE) {
+        // The clip stops too early to carry this shot. Keep the arc, show the 2D move instead.
+        useClip = false;
+      } else {
+        clipStart = m.start;
+        nBeats = Math.min(nBeats + CLIP_BONUS_BEATS, CLIP_MAX_BEATS, movingBeats);
+      }
+    }
 
     // The zoom ceiling, applied here rather than trusted shot by shot. KB_MAX_ZOOM was only ever
     // used to prescale the image plate; nothing enforced it on the moves themselves, so "lean"
@@ -447,7 +471,7 @@ function buildEditPlan(count, hasClip) {
     // built for 1.1, which is the one thing this whole approach exists to avoid.
     zFrom = Math.min(zFrom, KB_MAX_ZOOM); zTo = Math.min(zTo, KB_MAX_ZOOM);
 
-    plan.push({ type, dirSign: d, zFrom, zTo, fromU, toU, durationMs: beats(nBeats) });
+    plan.push({ type, dirSign: d, zFrom, zTo, fromU, toU, durationMs: beats(nBeats), useClip, clipStart });
   }
 
   // Transitions. Mostly dissolves, with a hard cut every third shot for lift. The hard cut is
@@ -754,6 +778,66 @@ async function loadClipVideo(clip) {
   return v;
 }
 
+// HOW LONG DOES THIS CLIP ACTUALLY MOVE?
+//
+// Measured, because it cannot be assumed and it is not the same twice. Ray 3.2 runs its camera
+// move and then STOPS, holding the last frame for whatever is left of the five seconds. How long
+// it moves for varies per clip: one room was still travelling at 4.7s while another had come to
+// rest by 0.6s. Read off a recording of eight rooms, the moving part ran anywhere from under a
+// second to the full clip.
+//
+// This was found the hard way. The edit had just been changed to hold a clip-carrying shot for
+// 4.66s of its 5 seconds - on the reasoning that a clip we paid for should be seen - and that
+// pushed several shots deep into the dead tail, so they showed real motion and then froze on
+// screen for two seconds. The utilisation figure that justified it counted the clip's DURATION,
+// not its MOTION, which is the only part worth paying for.
+//
+// Samples six times a second into a 64x36 buffer. The threshold floats with the clip's own peak,
+// because a slow dolly and a fast orbit are nowhere near each other in absolute terms.
+async function measureClipMotion(v) {
+  const dur = isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
+  if (!dur) return null;
+  const W = 64, H = 36, STEP = 1 / 6;
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const cx = c.getContext("2d", { willReadFrequently: true });
+  if (!cx) return null;
+
+  const seek = (t) => new Promise((done) => {
+    let settled = false;
+    const finish = () => { if (settled) return; settled = true; v.removeEventListener("seeked", finish); done(); };
+    v.addEventListener("seeked", finish);
+    // A seek that never reports back must not hang the whole walkthrough.
+    setTimeout(finish, 400);
+    try { v.currentTime = Math.min(t, Math.max(0, dur - 0.02)); } catch (e) { finish(); }
+  });
+
+  const samples = [];
+  let prev = null;
+  for (let t = 0; t < dur; t += STEP) {
+    await seek(t);
+    try { cx.drawImage(v, 0, 0, W, H); } catch (e) { return null; }
+    let px;
+    try { px = cx.getImageData(0, 0, W, H).data; } catch (e) { return null; }
+    if (prev) {
+      let sum = 0;
+      for (let k = 0; k < px.length; k += 4) sum += Math.abs(px[k] - prev[k]);
+      samples.push({ t, d: sum / (px.length / 4) });
+    }
+    prev = new Uint8ClampedArray(px);
+  }
+  if (samples.length < 2) return null;
+
+  const peak = samples.reduce((m, s) => Math.max(m, s.d), 0);
+  // Below this the picture is only carrying compression noise, not a camera.
+  const thresh = Math.max(0.6, peak * 0.18);
+  const live = samples.filter((s) => s.d >= thresh);
+  if (!live.length) return { start: 0, moving: 0, dur };
+  const start = Math.max(0, live[0].t - STEP);
+  const end = Math.min(dur, live[live.length - 1].t + STEP);
+  return { start, moving: Math.max(0, end - start), dur };
+}
+
 function releaseShot(shot) {
   if (shot && shot.video) {
     try { shot.video.pause(); } catch (e) {}
@@ -837,7 +921,9 @@ function FlythroughStage({ stills, specs, clips, onError, titles }) {
         // that single shot instead of taking down the whole walkthrough.
         videos = [];
         for (let i = 0; i < stills.length; i++) {
-          if (!clips[i]) { videos.push(null); continue; }
+          // A clip the plan rejected for barely moving is not loaded at all - that also saves
+          // the phone a video element it would only have decoded to stand still.
+          if (!clips[i] || (specs[i] && specs[i].useClip === false)) { videos.push(null); continue; }
           try {
             const v = await loadClipVideo(clips[i]);
             if (disposed) { releaseShot({ video: v }); return; }
@@ -1108,6 +1194,8 @@ function Rundvis() {
   const [hqProgress, setHqProgress] = useState({ current: 0, total: 0, phase: "" });
   const [hqError, setHqError] = useState("");
   const [hqClips, setHqClips] = useState(null); // array of clip URLs, one per still (null = not generated)
+  // What each clip's camera actually does, measured once per clip. null = not measured yet.
+  const [hqMotion, setHqMotion] = useState(null);
   // One model, so no picker. Quality is the only choice left, and it is a real one: Test exists
   // so a room can be checked for half the price before a whole property is committed to.
   const QUALITIES = { test: { label: "Test", usd: 0.45 }, final: { label: "Fuld kvalitet", usd: 0.95 } };
@@ -1184,6 +1272,7 @@ function Rundvis() {
     if (target < 0 || target >= flythroughStills.length) return;
     setFlythroughStills((prev) => swap(prev, idx, target));
     setHqClips((prev) => (prev ? swap(prev, idx, target) : prev));
+    setHqMotion((prev) => (prev ? swap(prev, idx, target) : prev));
     setImages((prev) => (target < prev.length ? swap(prev, idx, target) : prev));
     // The finished file no longer matches what is on screen.
     setExportFile((prev) => { if (prev) URL.revokeObjectURL(prev.url); return null; });
@@ -1514,11 +1603,56 @@ function Rundvis() {
   // worth upgrading next, and the "selected rooms" list would reshuffle under the agent between
   // one click and the next.
   const basePlan = useMemo(() => buildEditPlan(flythroughStills.length), [flythroughStills.length]);
-  const clipSignature = (hqClips || []).map((c) => (c ? 1 : 0)).join("");
+  const motionSignature = (hqMotion || [])
+    .map((m) => (m ? `${m.start.toFixed(2)},${m.moving.toFixed(2)}` : "-"))
+    .join("|");
   const flythroughParams = useMemo(
-    () => buildEditPlan(flythroughStills.length, (i) => !!(hqClips && hqClips[i])),
-    [flythroughStills.length, clipSignature]
+    () => buildEditPlan(flythroughStills.length, (i) => (hqMotion && hqMotion[i]) || null),
+    [flythroughStills.length, motionSignature]
   );
+
+  // Measure each clip once, as it arrives. The edit then fits itself to the result: a clip that
+  // travels for the whole five seconds earns a longer shot, one that comes to rest early gets a
+  // shorter one, and one that never really moves is dropped in favour of the free 2D move.
+  //
+  // Done here rather than inside the player so that measuring cannot feed back into the player's
+  // own loading: the clip is fetched, measured, and released again before the edit changes.
+  useEffect(() => {
+    if (!hqClips) return;
+    let cancelled = false;
+    const found = new Array(hqClips.length).fill(null);
+    (async () => {
+      for (let i = 0; i < hqClips.length; i++) {
+        if (cancelled) return;
+        if (!hqClips[i]) continue;
+        if (hqMotion && hqMotion[i]) continue;
+        let v = null;
+        try {
+          v = await loadClipVideo(hqClips[i]);
+          const m = await measureClipMotion(v);
+          if (cancelled) return;
+          // A clip that cannot be measured is left unmeasured on purpose: it then keeps its arc
+          // length and plays from the start, which is what the edit did before any of this.
+          if (m) found[i] = m;
+        } catch (e) {
+          /* leave unmeasured */
+        } finally {
+          if (v) releaseShot({ video: v });
+        }
+      }
+      // Published in ONE go at the end. Setting each measurement as it arrived changed the edit
+      // seven times over, and because the player rebuilds when the shot lengths change, that
+      // restarted playback from the top on every one of them.
+      if (cancelled || !found.some(Boolean)) return;
+      setHqMotion((prev) => {
+        const next = prev ? [...prev] : [];
+        while (next.length < hqClips.length) next.push(null);
+        found.forEach((m, i) => { if (m) next[i] = m; });
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [hqClips]);
 
   // WHICH ROOMS TO PAY FOR, when upgrading a selection rather than all of them.
   //

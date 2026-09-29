@@ -161,26 +161,43 @@ image-to-video-model, der laver et klip med rigtig kamerabevægelse gennem
 rummet. Et klip er 5 sekunder, men de fleste klip står kun 2–3 sekunder på
 skærmen, fordi det matcher tempoet i rigtige boligvideoer.
 
-Hvilken del af klippet der vises, er en afvejning. Luma binder det uploadede
-foto til frame 0, så klippet åbner som fotografiet præcis og driver længere væk
-jo længere det kører: starten er mest tro mod boligen, men også der hvor
-kameraet stadig er ved at komme i gang. Korte klip springer derfor et stykke ind
-— en brøkdel af den ubrugte del, højst ét sekund — så de viser bevægelsen frem
-for optrapningen. Lange klip, åbningen og afslutningen først og fremmest, starter
-ved nul og åbner på fotoet urørt (`clipStartFor`).
+**Klippene parkerer, og det styrer hele klipningen.** Ray 3.2 kører sin
+kamerabevægelse færdig og *stopper* så — og holder sidste frame resten af de
+5 sekunder. Hvor længe den bevæger sig varierer kraftigt fra klip til klip.
+Målt på en optagelse af otte rum: ét rum kørte stadig ved 4,7s, et andet var
+gået i stå efter 0,5s.
 
-Udvælgelsen af hvilke rum der får et klip, når ikke hele boligen opgraderes:
-filmen deles i lige så mange afsnit som der er klip at bruge, og det klip der
-står længst på skærmen i hvert afsnit får et. Målt er det næsten uden betydning
-— både denne og en jævn fordeling efter position lander under 39 % af spilletiden
-ved 18 billeder, fordi en jævn fordeling allerede rammer den lange åbning og
-afslutning. Den er beholdt fordi den aldrig er dårligere, men det egentlige spild
-er at et klip er 5 sekunder og de fleste klip er under 3.
+Det kan ikke antages, så det bliver **målt** (`measureClipMotion`). Hvert klip
+samples seks gange i sekundet ned i en 64×36-buffer, og tærsklen flyder med
+klippets eget maksimum, fordi en langsom dolly og en hurtig orbit ikke ligner
+hinanden i absolutte tal. Klipningen retter sig så efter resultatet:
 
-Begge lag deler samme klipning (`buildEditPlan`, `composeShowFrame`):
-beat-gitter på 116 BPM, hårde klip, dissolves, speed ramps, vignette. Det er
-klipningen der gør en boligvideo lækker, og den er uafhængig af hvordan
-billederne bevæger sig.
+- Et klip der kører hele vejen får et **længere** klip på skærmen.
+- Et klip der går i stå tidligt får et **kortere**, så det aldrig vises ind i
+  den døde hale.
+- Et klip der stort set ikke bevæger sig bliver **kasseret** til fordel for den
+  gratis 2D-bevægelse, som i det mindste bevæger sig hele vejen igennem
+  (`CLIP_MIN_COVERAGE`). At holde tempo-kurven og smide klippet væk er bedre
+  end at skrumpe klippet ned om et klip der stopper — det ville lave et
+  4-sekunders åbningsklip om til et glimt på ét sekund.
+- Et klip der ikke kunne måles beholder sin plads i kurven og spiller fra
+  starten. Det er den sikre retning at tage fejl i.
+
+Målt på den optagne bolig gik frosset skærmtid fra 5,7s til 0,0s, og 2 af 7
+klip blev kasseret som ubrugelige.
+
+**Det her blev fundet den hårde vej.** Klipningen var lige blevet lavet om, så
+et rum med klip stod 4,66s af sine 5 sekunder — med den begrundelse at et klip
+man har betalt for bør ses. Det skubbede flere rum direkte ned i den døde hale,
+så de viste ægte bevægelse og frøs derefter på skærmen i to sekunder. Det
+udnyttelsestal der retfærdiggjorde ændringen talte klippets *varighed*, ikke
+dets *bevægelse* — og det er kun bevægelsen der er værd at betale for.
+
+En tidligere version sprang desuden et stykke *ind* i klippet, ud fra en teori
+om at starten var en optrapning værd at springe over. Målingen viste det
+modsatte: klippene kommer ud af starthullet i bevægelse og bremser ned mod en
+stilstand. Springet gik altså forbi ægte bevægelse for at sætte sig tættere på
+den døde ende.
 
 ### Nødvendige miljøvariabler i Vercel
 
