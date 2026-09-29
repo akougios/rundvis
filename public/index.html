@@ -56,24 +56,24 @@ const VIDEO_MODES = [
   {
     id: "basic",
     label: "Basic",
-    tagline: "Gratis, klar med det samme",
+    tagline: "Gratis · klar med det samme",
     points: [
-      "Kameraet bevæger sig hen over dine fotos — zoom og panorering",
-      "Hver pixel kommer direkte fra dit billede, intet forvrænges",
-      "Filmisk klipning: beat, hårde klip og bløde overgange",
+      "Zoom og panorering hen over dine fotos",
+      "Intet forvrænges — lige linjer forbliver lige",
+      "Filmisk klipning med beat og overgange",
     ],
-    bedst: "Til hverdagens boliger, og når det skal være klar nu.",
+    bedst: "Til hverdagens boliger.",
   },
   {
     id: "highend",
     label: "High-end",
-    tagline: "Ægte kamerabevægelse gennem rummene",
+    tagline: "Fra ~0,45 $ pr. klip · nogle minutter",
     points: [
-      "Hvert foto bliver til et klip hvor kameraet faktisk bevæger sig i rummet",
-      "Samme klipning og samme formater som Basic",
-      "Koster pr. klip og tager nogle minutter",
+      "Kameraet bevæger sig faktisk gennem rummet",
+      "Samme klipning og formater som Basic",
+      "Test ét billede før du kører hele boligen",
     ],
-    bedst: "Til liebhaverboliger og det der skal sælge sig selv.",
+    bedst: "Til liebhaverboliger.",
   },
 ];
 const FALLBACK_SCENE_MS = 6000;
@@ -886,12 +886,9 @@ function Rundvis() {
   const [hqProgress, setHqProgress] = useState({ current: 0, total: 0, phase: "" });
   const [hqError, setHqError] = useState("");
   const [hqClips, setHqClips] = useState(null); // array of clip URLs, one per still (null = not generated)
-  const [hqModel, setHqModel] = useState(null);   // chosen model key; null until the registry loads
-  const [hqModels, setHqModels] = useState([]);   // registry from /api/generate-clip/models
-  // Side-by-side bake-off: the same photo through every model at once. Which model suits real
-  // listing photos is not answerable from documentation, and this makes answering it cost about
-  // a krone per model instead of a whole property per model.
-  const [compareRuns, setCompareRuns] = useState(null); // [{key,label,usdPerClip,status,clipUrl,error}]
+  // One model, so no picker. Quality is the only choice left, and it is a real one: Test exists
+  // so a room can be checked for half the price before a whole property is committed to.
+  const QUALITIES = { test: { label: "Test", usd: 0.45 }, final: { label: "Fuld kvalitet", usd: 0.95 } };
   // Which photo the bake-off and the single-photo test use. Defaults to the SECOND photo, not
   // the first: by the app's own upload guidance photo 1 is the facade, and an exterior is the
   // easiest thing these models have to do - open scene, no doorframes, no furniture to bend.
@@ -1247,76 +1244,6 @@ function Rundvis() {
   //
   // The photo is uploaded ONCE and the same URL handed to all three, so the comparison is of the
   // models and nothing else.
-  // What one clip costs on a given model at the current quality, or null when the provider
-  // bills it on the user's own account in a way we cannot price.
-  const prisPrKlip = (m) => {
-    if (!m) return null;
-    if (m.priceByQuality) return m.priceByQuality[hqQuality] ?? m.priceByQuality.test;
-    return m.usdPerClip > 0 ? m.usdPerClip : null;
-  };
-
-  const runModelComparison = async () => {
-    if (!hqModels.length || flythroughStills.length === 0) return;
-    if (compareRuns && compareRuns.some((r) => r.status === "working")) return;
-
-    const initial = hqModels.map((m) => ({
-      key: m.key, label: m.label, usdPerClip: m.usdPerClip, status: "working", clipUrl: null, error: "",
-    }));
-    setCompareRuns(initial);
-
-    let imageUrl;
-    try {
-      const up = await fetch("/api/upload-image", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dataUrl: flythroughStills[compareIndex], filename: `rundvis-sammenlign-${Date.now()}.jpg` }),
-      });
-      const upJson = await up.json();
-      if (!up.ok) throw new Error(upJson.error || "Kunne ikke uploade billedet.");
-      imageUrl = upJson.url;
-    } catch (err) {
-      setCompareRuns(initial.map((r) => ({ ...r, status: "error", error: err.message })));
-      return;
-    }
-
-    const motion = flythroughParams[compareIndex] ? flythroughParams[compareIndex].type : "push";
-    const update = (key, patch) =>
-      setCompareRuns((prev) => (prev || []).map((r) => (r.key === key ? { ...r, ...patch } : r)));
-
-    await Promise.all(
-      hqModels.map(async (m) => {
-        try {
-          const create = await fetch("/api/generate-clip/create", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ imageUrl, motion, model: m.key, aspectRatio: previewFormat, seed: 1000, quality: hqQuality }),
-          });
-          const created = await create.json();
-          if (!create.ok) throw new Error(created.error || "Kunne ikke starte klippet.");
-
-          for (let attempt = 0; attempt < 150; attempt++) {
-            await new Promise((r) => setTimeout(r, 4000));
-            const st = await fetch("/api/generate-clip/status", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                provider: created.provider, id: created.id,
-                statusUrl: created.statusUrl, responseUrl: created.responseUrl,
-              }),
-            });
-            const stJson = await st.json();
-            if (!st.ok) throw new Error(stJson.error || "Kunne ikke hente status.");
-            if (stJson.done) { update(m.key, { status: "done", clipUrl: stJson.videoUrl, sig: stJson.sig }); return; }
-          }
-          throw new Error("Blev ikke færdig i tide.");
-        } catch (err) {
-          // One model failing says something useful about that model; it must not take the
-          // other two down with it.
-          update(m.key, { status: "error", error: err.message });
-        }
-      })
-    );
-  };
 
   // The whole edit - shot design, beat-aligned durations, transitions and speed curves.
   const flythroughParams = useMemo(
@@ -1363,7 +1290,6 @@ function Rundvis() {
           body: JSON.stringify({
             imageUrl: upJson.url,
             motion: flythroughParams[i] ? flythroughParams[i].type : "push",
-            model: hqModel,
             // Generate natively in the shape the video will be shown in, rather than cropping a
             // widescreen clip down afterwards - on the models that support it.
             aspectRatio: previewFormat,
@@ -1693,10 +1619,10 @@ function Rundvis() {
               {scenes.length === 0 && <h1 className="font-display text-2xl mb-1">Filmisk gennemgang</h1>}
               {scenes.length > 0 && <h2 className="font-display text-lg mb-1">Filmisk gennemgang</h2>}
               <p className="text-xs mb-1" style={{ color: MUTED }}>
-                Klipper op til {MAX_FLYTHROUGH_IMAGES} af dine billeder sammen til en gennemgang med bevægelse, rytme og overgange. Bagefter kan du hente den som videofil i tre formater.
+                Op til {MAX_FLYTHROUGH_IMAGES} billeder klippet sammen med bevægelse, rytme og overgange.
               </p>
               <p className="text-xs mb-1" style={{ color: MUTED }}>
-                Dine billeder bliver aldrig forvrænget eller gendigtet — kameraet flytter kun udsnittet, så hver eneste pixel kommer direkte fra dit foto, og lige linjer forbliver lige. Første og sidste klip vises helt uden beskæring. Upload i den rækkefølge man skal bevæge sig igennem: facade/udefra først, så indgang, så rum for rum.
+                Billederne forvrænges aldrig — kameraet flytter kun udsnittet, så lige linjer forbliver lige.
               </p>
               {images.length >= 1 && flythroughStatus === "idle" && (
                 <p className="text-xs mb-4" style={{ color: MUTED }}>
@@ -1773,51 +1699,18 @@ function Rundvis() {
 
               {videoMode === "highend" && flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="mb-5 p-4 rounded-xl" style={{ backgroundColor: SURFACE_2, border: `1px solid ${LINE}` }}>
-                  <p className="text-sm mb-1" style={{ color: TEXT }}>Ægte kamerabevægelse gennem rummene</p>
-                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>
-                    Ovenstående er et storyboard: rækkefølge, klipning og tempo, gratis og med det samme.
-                    Herunder sendes hvert billede til en videomodel, der laver et klip hvor kameraet
-                    faktisk bevæger sig gennem rummet. Kun de første sekunder af hvert klip bruges — det
-                    er dér modellen holder sig tættest på dit foto.
-                  </p>
+                  <p className="text-sm mb-3" style={{ color: TEXT }}>Ægte kamerabevægelse</p>
 
-                  {hqStatus !== "working" && hqModels.length > 0 && (
+                  {hqStatus !== "working" && (
                     <div className="mb-3">
                       <p className="text-[11px] mb-1.5" style={{ color: MUTED }}>Kvalitet</p>
-                      <div className="flex flex-wrap gap-2 mb-3">
-                        {[
-                          { k: "test", t: "Test", u: "billigst — brug den til at vurdere modellen" },
-                          { k: "final", t: "Endelig", u: "fuld opløsning — brug den når modellen er valgt" },
-                        ].map((q) => {
-                          const on = hqQuality === q.k;
-                          const m = hqModels.filter((x) => x.key === hqModel)[0];
-                          const pris = m && m.priceByQuality ? m.priceByQuality[q.k] : m ? m.usdPerClip : null;
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(QUALITIES).map(([k, q]) => {
+                          const on = hqQuality === k;
                           return (
                             <button
-                              key={q.k}
-                              onClick={() => setHqQuality(q.k)}
-                              className="px-3 py-1.5 rounded-full text-xs whitespace-nowrap"
-                              style={{
-                                border: `1px solid ${on ? ACCENT : LINE}`,
-                                backgroundColor: on ? ACCENT : "transparent",
-                                color: on ? "#fff" : MUTED,
-                              }}
-                              title={q.u}
-                            >
-                              {q.t}
-                              {pris ? <span style={{ opacity: 0.75 }}> ~{pris.toFixed(2)} $/klip</span> : null}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <p className="text-[11px] mb-1.5" style={{ color: MUTED }}>Videomodel</p>
-                      <div className="flex flex-wrap gap-2 mb-2">
-                        {hqModels.map((m) => {
-                          const on = hqModel === m.key;
-                          return (
-                            <button
-                              key={m.key}
-                              onClick={() => setHqModel(m.key)}
+                              key={k}
+                              onClick={() => setHqQuality(k)}
                               className="px-3 py-1.5 rounded-full text-xs whitespace-nowrap"
                               style={{
                                 border: `1px solid ${on ? ACCENT : LINE}`,
@@ -1825,26 +1718,17 @@ function Rundvis() {
                                 color: on ? "#fff" : MUTED,
                               }}
                             >
-                              {m.label} <span style={{ opacity: 0.75 }}>{prisPrKlip(m) ? "~" + prisPrKlip(m).toFixed(2) + " $" : "?"}</span>
+                              {q.label} <span style={{ opacity: 0.75 }}>~{q.usd.toFixed(2)} $/klip</span>
                             </button>
                           );
                         })}
                       </div>
-                      {hqModels.filter((m) => m.key === hqModel).map((m) => (
-                        <p key={m.key} className="text-[10px]" style={{ color: MUTED }}>
-                          {m.note}
-                          {m.usdPerClip > 0 && " Kræver en FAL_KEY i Vercel."}
-                        </p>
-                      ))}
                     </div>
                   )}
 
                   {hqStatus !== "working" && flythroughStills.length > 1 && (
                     <div className="mb-3">
-                      <p className="text-[11px] mb-1.5" style={{ color: MUTED }}>
-                        Testbillede — vælg et <strong>rum</strong>, ikke facaden. Udendørs er let for modellerne;
-                        det er dørkarme, møbler og vinduer der afslører dem.
-                      </p>
+                      <p className="text-[11px] mb-1.5" style={{ color: MUTED }}>Testbillede — vælg et rum</p>
                       <div className="flex gap-2 overflow-x-auto pb-1">
                         {flythroughStills.map((src, i) => (
                           <button
@@ -1881,88 +1765,8 @@ function Rundvis() {
                         <Icon name="sparkles" size={14} />
                         Generér alle {flythroughStills.length}
                       </button>
-                      {hqModels.length > 1 && (
-                        <button
-                          onClick={runModelComparison}
-                          className="flex items-center gap-2 px-4 py-2 rounded-full text-sm"
-                          style={{ border: `1px solid ${LINE}`, color: TEXT }}
-                        >
-                          Sammenlign alle {hqModels.length} modeller
-                          <span style={{ color: MUTED }}>
-                            ~{hqModels.reduce((a, m) => a + (prisPrKlip(m) || 0), 0).toFixed(2)} $
-                          </span>
-                        </button>
-                      )}
                     </div>
                   )}
-
-                  {compareRuns && (
-                    <div className="mt-4">
-                      <p className="text-xs mb-2" style={{ color: TEXT }}>
-                        Samme foto, samme bevægelse, tre modeller — se selv hvilken der holder bedst på dit billede
-                      </p>
-                      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))" }}>
-                        {compareRuns.map((r) => (
-                          <div key={r.key} className="rounded-lg overflow-hidden" style={{ border: `1px solid ${LINE}` }}>
-                            <div
-                              className="relative"
-                              style={{ backgroundColor: "#000", aspectRatio: previewFormat.replace(":", "/") }}
-                            >
-                              {r.clipUrl ? (
-                                <video
-                                  src={proxyUrlFor({ url: r.clipUrl, sig: r.sig })}
-                                  className="absolute inset-0 w-full h-full object-cover"
-                                  controls
-                                  loop
-                                  muted
-                                  playsInline
-                                />
-                              ) : (
-                                <div className="absolute inset-0 flex items-center justify-center text-[11px] px-3 text-center"
-                                  style={{ color: r.status === "error" ? AMBER : MUTED }}>
-                                  {r.status === "error" ? r.error : "Genererer…"}
-                                </div>
-                              )}
-                            </div>
-                            <div className="px-3 py-2">
-                              <p className="text-xs" style={{ color: TEXT }}>{r.label}</p>
-                              <p className="text-[10px]" style={{ color: MUTED }}>
-                                {r.usdPerClip > 0 ? "~" + r.usdPerClip.toFixed(2) + " $ pr. klip" : "pris ukendt"}
-                                {r.status === "done" && " · færdig"}
-                                {r.status === "working" && " · arbejder"}
-                              </p>
-                              {r.status === "done" && (
-                                <button
-                                  onClick={() => setHqModel(r.key)}
-                                  className="text-[10px] mt-1"
-                                  style={{ color: hqModel === r.key ? ACCENT : MUTED }}
-                                >
-                                  {hqModel === r.key ? "✓ valgt til hele boligen" : "Vælg denne"}
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {hqStatus !== "working" && (() => {
-                    const m = hqModels.filter((x) => x.key === hqModel)[0];
-                    // A model billed on the user's own provider account has no price to show
-                    // here - printing "0.00 $" would read as free, which it is not.
-                    const priced = prisPrKlip(m) != null;
-                    return (
-                      <p className="text-[10px] mt-2" style={{ color: MUTED }}>
-                        Start med ét billede — så ser du hvordan modellen klarer dine fotos, før du bruger noget på
-                        hele boligen.{" "}
-                        {priced
-                          ? `Ét klip ca. ${prisPrKlip(m).toFixed(2)} $ — alle ${flythroughStills.length} koster ca. ${(prisPrKlip(m) * flythroughStills.length).toFixed(2)} $.`
-                          : "Prisen på denne model kendes ikke her — se forbruget hos udbyderen."}{" "}
-                        {`Der køres ${HQ_CONCURRENCY} klip ad gangen, så ${flythroughStills.length} billeder tager omkring ${Math.max(2, Math.ceil((flythroughStills.length / HQ_CONCURRENCY) * 2))} minutter.`}
-                      </p>
-                    );
-                  })()}
 
                   {hqStatus === "working" && (
                     <div>
@@ -1980,7 +1784,7 @@ function Rundvis() {
                         />
                       </div>
                       <p className="text-[10px] mt-2" style={{ color: MUTED }}>
-                        Du kan lade fanen stå. Færdige klip vises i afspilleren ovenfor efterhånden.
+                        Klippene vises i afspilleren efterhånden.
                       </p>
                     </div>
                   )}
@@ -1999,10 +1803,7 @@ function Rundvis() {
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="mb-5 p-4 rounded-xl" style={{ backgroundColor: SURFACE_2, border: `1px solid ${LINE}` }}>
                   <p className="text-sm mb-1" style={{ color: TEXT }}>Musik</p>
-                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>
-                    Klipningen ligger på et fast beat, så en hvilken som helst rolig track falder i
-                    hak med klippene. Musikken lægges ind i den fil du henter — ikke kun i previewet.
-                  </p>
+                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>Lægges med i den fil du henter.</p>
 
                   <div className="flex flex-wrap items-center gap-3">
                     <label
@@ -2034,8 +1835,7 @@ function Rundvis() {
                   {musicError && <p className="text-xs mt-2" style={{ color: AMBER }}>{musicError}</p>}
                   {!musicName && !musicError && (
                     <p className="text-[10px] mt-2" style={{ color: MUTED }}>
-                      Brug musik du har rettighederne til — videoen skal offentliggøres. Er tracket kortere
-                      end videoen, gentages det, og det tones ud til sidst.
+                      Brug musik du har rettighederne til. Kortere tracks gentages og tones ud.
                     </p>
                   )}
                 </div>
@@ -2076,7 +1876,7 @@ function Rundvis() {
 
                   {exportStatus === "working" && (
                     <p className="text-[10px] mt-1" style={{ color: AMBER }}>
-                      Optagelsen kører i realtid og tager omtrent lige så lang tid som videoen varer. <strong>Bliv på denne fane imens</strong> — browseren pauser optagelsen i en baggrundsfane, og så bliver filen tom.
+                      Optagelsen kører i realtid. <strong>Bliv på denne fane imens</strong> — ellers bliver filen tom.
                     </p>
                   )}
 
@@ -2089,7 +1889,7 @@ function Rundvis() {
                       </a>
                       {exportFile.name.endsWith(".webm") && (
                         <p className="text-[10px] mt-1" style={{ color: MUTED }}>
-                          Din browser optager i WebM. Instagram og TikTok foretrækker MP4 — åbn siden i Safari 17+ for at få en MP4 direkte, eller konvertér filen.
+                          Din browser optager i WebM. Konvertér til MP4 hvis modtageren kræver det.
                         </p>
                       )}
                     </div>
@@ -2099,7 +1899,7 @@ function Rundvis() {
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <p className="text-[10px] mb-4" style={{ color: MUTED }}>
-                  Alt beregnes i din browser: ingen upload, ingen ventetid, ingen omkostning pr. video — og samme billeder giver altid præcis samme video.
+                  Samme billeder giver altid samme video.
                 </p>
               )}
 

@@ -18,7 +18,7 @@
 // in memory and does not run into the response size cap that applies to ordinary serverless
 // functions.
 
-import { verifyVideoUrl } from "./_fal.js";
+import { verifyVideoUrl } from "./_luma.js";
 
 export const config = { runtime: "edge" };
 
