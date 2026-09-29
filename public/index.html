@@ -45,7 +45,37 @@ const PROPERTY_TYPES = [
   { id: "prisnedsaettelse", label: "Prisnedsættelse", hint: "Tydeligt fokus på ny pris" },
   { id: "aabenthus", label: "Åbent hus", hint: "Dato og tidspunkt fremhævet" },
 ];
-const STEPS = [{ id: 1, label: "Boligtype" }, { id: 2, label: "Billeder" }, { id: 3, label: "Manuskript" }, { id: 4, label: "Afspil" }];
+// Three steps, in the order the work actually happens. The old flow had four, two of which
+// (property type, script) only fed a voiceover feature that the walkthrough never used - so they
+// asked the agent for decisions that changed nothing they could see.
+const STEPS = [{ id: 1, label: "Videotype" }, { id: 2, label: "Billeder" }, { id: 3, label: "Video" }];
+
+// The two products, chosen up front because everything downstream differs: what it costs, how
+// long it takes, and whether a video service is involved at all.
+const VIDEO_MODES = [
+  {
+    id: "basic",
+    label: "Basic",
+    tagline: "Gratis, klar med det samme",
+    points: [
+      "Kameraet bevæger sig hen over dine fotos — zoom og panorering",
+      "Hver pixel kommer direkte fra dit billede, intet forvrænges",
+      "Filmisk klipning: beat, hårde klip og bløde overgange",
+    ],
+    bedst: "Til hverdagens boliger, og når det skal være klar nu.",
+  },
+  {
+    id: "highend",
+    label: "High-end",
+    tagline: "Ægte kamerabevægelse gennem rummene",
+    points: [
+      "Hvert foto bliver til et klip hvor kameraet faktisk bevæger sig i rummet",
+      "Samme klipning og samme formater som Basic",
+      "Koster pr. klip og tager nogle minutter",
+    ],
+    bedst: "Til liebhaverboliger og det der skal sælge sig selv.",
+  },
+];
 const FALLBACK_SCENE_MS = 6000;
 
 function seededRandom(seed) {
@@ -281,24 +311,37 @@ function buildEditPlan(count) {
       zFrom = 1.08; zTo = 1.0;
       fromU = { x: -0.2 * d, y: 0.45 }; toU = { x: 0, y: -0.1 };
     } else {
-      // THREE types, not four. Direction alternates with i, so a cycle of even length would
-      // land every pan on the same parity - and therefore give every pan the same direction.
-      // An odd-length cycle makes each type alternate properly from one appearance to the next.
-      const cycle = ["pan", "drift", "push"];
+      // FIVE types on an odd-length cycle. Odd matters: direction alternates with i, so an
+      // even-length cycle would land every pan on the same parity and give them all the same
+      // direction. Five also means the pattern does not visibly repeat inside one property.
+      const cycle = ["pan", "drift", "push", "pan", "pullback"];
       type = cycle[(i - 1) % cycle.length];
-      nBeats = i % 2 ? 4 : 5; // 2.5s / 3.1s alternating, so the rhythm never goes metronomic
+      nBeats = i % 2 ? 4 : 5; // 2.1s / 2.6s alternating, so the rhythm never goes metronomic
+
+      // Every shot gets its own amount, not just its own direction. Earlier all pushes moved
+      // exactly 7% and all pans held zoom at zero, which reads as a template rather than as a
+      // camera: a real edit varies how far each move travels.
+      const v = 0.75 + seededRandom(i * 31.7 + 8.2) * 0.5;   // 0.75-1.25 on the move
+      const vz = 0.7 + seededRandom(i * 47.3 + 1.9) * 0.6;   // 0.7-1.3 on the zoom
+
       if (type === "pan") {
-        // A travelling frame at a fixed crop. Both axes are driven; because each is scaled by
-        // its OWN slack, the move naturally runs along whichever axis the photo actually has
-        // room in - wide for a 9:16 frame, tall for a 16:9 one - with no special-casing.
-        zFrom = 1.06; zTo = 1.06;
-        fromU = { x: -T * d, y: T * 0.25 * d }; toU = { x: T * d, y: -T * 0.25 * d };
+        // A travelling frame. Both axes are driven; because each is scaled by its OWN slack, the
+        // move runs along whichever axis the photo actually has room in - wide for a 9:16 frame,
+        // tall for a 16:9 one - with no special-casing. A touch of zoom keeps it from feeling
+        // locked off.
+        zFrom = 1.05; zTo = 1.05 + 0.025 * vz;
+        fromU = { x: -T * d * v, y: T * 0.25 * d * v }; toU = { x: T * d * v, y: -T * 0.25 * d * v };
       } else if (type === "drift") {
-        zFrom = 1.02; zTo = 1.09;
-        fromU = { x: -T * 0.55 * d, y: -T * 0.5 * d }; toU = { x: T * 0.55 * d, y: T * 0.5 * d };
+        zFrom = 1.02; zTo = 1.02 + 0.07 * vz;
+        fromU = { x: -T * 0.55 * d * v, y: -T * 0.5 * d * v }; toU = { x: T * 0.55 * d * v, y: T * 0.5 * d * v };
+      } else if (type === "pullback") {
+        // Opens tight and opens up. Mixed into the body of the edit, not saved for the ending,
+        // so the video is not a run of push-ins with one pull-out at the very end.
+        zFrom = 1.04 + 0.05 * vz; zTo = 1.005;
+        fromU = { x: T * 0.4 * d * v, y: T * 0.3 * d * v }; toU = { x: -T * 0.15 * d * v, y: -T * 0.1 * d * v };
       } else {
-        zFrom = 1.01; zTo = 1.08;
-        fromU = { x: T * 0.3 * d, y: T * 0.25 * d }; toU = { x: -T * 0.3 * d, y: -T * 0.25 * d };
+        zFrom = 1.01; zTo = 1.01 + 0.075 * vz;
+        fromU = { x: T * 0.3 * d * v, y: T * 0.25 * d * v }; toU = { x: -T * 0.3 * d * v, y: -T * 0.25 * d * v };
       }
     }
 
@@ -630,8 +673,11 @@ const EXPORT_FORMATS = {
 
 function pickRecorderMime() {
   const candidates = [
+    // Codec pairs first, so the chosen container is one that can actually carry the music track.
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
     "video/mp4;codecs=avc1.42E01E",
     "video/mp4",
+    "video/webm;codecs=vp9,opus",
     "video/webm;codecs=vp9",
     "video/webm;codecs=vp8",
     "video/webm",
@@ -645,7 +691,7 @@ const HIDDEN_TAB_MSG =
   "Optagelsen kræver at denne fane er fremme. Browseren sætter canvas-optagelse på pause i en " +
   "baggrundsfane, og filen bliver tom. Lad fanen være synlig, og prøv igen.";
 
-async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, onProgress }) {
+async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, onProgress, musicBytes }) {
   if (!window.MediaRecorder) throw new Error("Din browser understøtter ikke videooptagelse. Prøv Chrome eller Safari 17+.");
   const mime = pickRecorderMime();
   if (!mime) throw new Error("Din browser kan ikke optage video fra et canvas.");
@@ -667,6 +713,9 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
 
   const shots = [];
   const cleanup = () => { shots.forEach(releaseShot); shots.length = 0; };
+  // Declared out here, not inside the try: the finally below shuts them down, and a `let` inside
+  // the try block would not be in scope there.
+  let audioCtx = null, musicNodes = null;
 
   try {
     // Sources are built up front, at this format's size, so no frame stalls mid-recording.
@@ -688,12 +737,47 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
     const totalMs = shots.reduce((a, s) => a + s.spec.durationMs, 0);
     const totalFrames = Math.max(1, Math.round((totalMs / 1000) * fps));
 
+    // Music is mixed in as a real audio track on the recorded stream, so the downloaded file
+    // carries it rather than the agent having to add it in another program. It is faded out over
+    // the last second, and cut to the video's length.
+    const totalSeconds = totalMs / 1000;
+    const buildMusicTrack = async () => {
+      if (!musicBytes) return null;
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return null;
+        audioCtx = new Ctx();
+        const buf = await audioCtx.decodeAudioData(musicBytes.slice(0));
+        const dest = audioCtx.createMediaStreamDestination();
+        const src = audioCtx.createBufferSource();
+        src.buffer = buf;
+        // A track shorter than the video loops rather than leaving silence at the end.
+        src.loop = true;
+        const gain = audioCtx.createGain();
+        const FADE = Math.min(1.2, totalSeconds / 4);
+        gain.gain.setValueAtTime(0, audioCtx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.85, audioCtx.currentTime + Math.min(1, FADE));
+        gain.gain.setValueAtTime(0.85, audioCtx.currentTime + Math.max(0, totalSeconds - FADE));
+        gain.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + totalSeconds);
+        src.connect(gain); gain.connect(dest);
+        musicNodes = { src, dest };
+        return dest.stream.getAudioTracks()[0];
+      } catch (e) {
+        // Music is a nice-to-have; a video without it beats no video at all.
+        return null;
+      }
+    };
+    const musicTrack = await buildMusicTrack();
+
     const stream = out.captureStream(0);
     const track = stream.getVideoTracks()[0];
     // Safari and older Chrome don't expose requestFrame on the capture track; there the stream
     // has to sample the canvas on its own clock instead of being pushed one frame at a time.
     const manualFrames = typeof track.requestFrame === "function";
-    const liveStream = manualFrames ? stream : out.captureStream(fps);
+    const baseStream = manualFrames ? stream : out.captureStream(fps);
+    const liveStream = musicTrack
+      ? new MediaStream([...baseStream.getVideoTracks(), musicTrack])
+      : baseStream;
     const chunks = [];
     // Scaled to the pixel count: 1080p needs roughly twice the bitrate 720p did, and a slow pan
     // across a detailed room is exactly the content that shows compression blocking.
@@ -702,6 +786,7 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
     recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
     const finished = new Promise((res) => { recorder.onstop = res; });
     recorder.start();
+    if (musicNodes) { try { musicNodes.src.start(); } catch (e) {} }
 
     // If the tab is hidden part-way through, everything recorded from that point is lost. Stop
     // and say so, rather than finishing and handing over a truncated file.
@@ -741,12 +826,15 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
     return blob;
   } finally {
     cleanup();
+    if (musicNodes) { try { musicNodes.src.stop(); } catch (e) {} }
+    if (audioCtx) { try { audioCtx.close(); } catch (e) {} }
   }
 }
 
 function Rundvis() {
   const [step, setStep] = useState(1);
-  const [propertyType, setPropertyType] = useState(null);
+  const [videoMode, setVideoMode] = useState(null); // basic | highend
+  const [propertyType, setPropertyType] = useState("villa"); // kept for the legacy script path
   const [images, setImages] = useState([]);
   const [address, setAddress] = useState("");
   const [agentName, setAgentName] = useState("");
@@ -780,6 +868,16 @@ function Rundvis() {
   // Which shape the walkthrough is previewed in. Defaults to wide: that is how a listing video is
   // watched on a property site, and it is the format the photos were shot in.
   const [previewFormat, setPreviewFormat] = useState("16:9");
+
+  // Music. The agent supplies the track: bundling one would mean shipping music we have no
+  // licence to redistribute, and a listing video is published publicly. An uploaded file is
+  // decoded once and reused for both the preview and the exported file.
+  const [musicName, setMusicName] = useState("");
+  const [musicError, setMusicError] = useState("");
+  const [musicOnPreview, setMusicOnPreview] = useState(true);
+  const musicBufferRef = useRef(null);   // decoded AudioBuffer
+  const musicRawRef = useRef(null);      // the original bytes, re-decoded for each export
+  const previewAudioRef = useRef(null);  // <audio> used only for the on-page preview
 
   // High-quality pass: each photo is sent to an image-to-video model, which returns a clip with
   // real camera movement through the room. Kept strictly separate from the free preview, because
@@ -1100,6 +1198,48 @@ function Rundvis() {
 
   const regenerateFlythrough = () => runFlythrough();
 
+  // Decodes an uploaded track once. Keeping the raw bytes too, because an AudioBuffer cannot be
+  // handed to a second AudioContext and the export makes its own.
+  const handleMusicFile = async (file) => {
+    if (!file) return;
+    setMusicError("");
+    try {
+      const bytes = await file.arrayBuffer();
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) throw new Error("Din browser understøtter ikke lydafspilning.");
+      const ctx = new Ctx();
+      // decodeAudioData consumes the buffer it is given, so it gets a copy.
+      const buf = await ctx.decodeAudioData(bytes.slice(0));
+      ctx.close();
+      musicRawRef.current = bytes;
+      musicBufferRef.current = buf;
+      setMusicName(`${file.name} · ${Math.round(buf.duration)} sek.`);
+      if (previewAudioRef.current) {
+        URL.revokeObjectURL(previewAudioRef.current.src);
+        previewAudioRef.current.src = URL.createObjectURL(file);
+      } else {
+        const a = new Audio(URL.createObjectURL(file));
+        a.loop = true;
+        previewAudioRef.current = a;
+      }
+    } catch (err) {
+      setMusicError("Kunne ikke læse lydfilen. Prøv en MP3, M4A eller WAV.");
+      musicBufferRef.current = null;
+      musicRawRef.current = null;
+      setMusicName("");
+    }
+  };
+
+  // The preview track follows the page: it plays while the walkthrough is on screen and stops
+  // when it is not, so music never keeps running behind a different step.
+  useEffect(() => {
+    const a = previewAudioRef.current;
+    if (!a) return;
+    const spiller = step === 3 && musicOnPreview && flythroughStatus === "done";
+    if (spiller) { a.currentTime = 0; a.play().catch(() => {}); } else { a.pause(); }
+    return () => { a.pause(); };
+  }, [step, musicOnPreview, flythroughStatus, musicName]);
+
   // ---- Model bake-off ----
   // Sends ONE photo to every model at once and shows the results side by side. Run in parallel
   // because the jobs are independent: three models finish in about the time one takes, instead
@@ -1303,6 +1443,7 @@ function Rundvis() {
         stills: flythroughStills,
         specs: flythroughParams,
         clips: hqClips,
+        musicBytes: musicRawRef.current,
         format,
         fps: 30,
         onProgress: setExportProgress,
@@ -1340,9 +1481,8 @@ function Rundvis() {
 
   const canGoStep = (n) => {
     if (n === 1) return true;
-    if (n === 2) return !!propertyType;
-    if (n === 3) return !!propertyType && images.length >= 3;
-    if (n === 4) return images.length >= 2 || (scenes.length > 0 && scenes.every((s) => s.text));
+    if (n === 2) return !!videoMode;
+    if (n === 3) return !!videoMode && images.length >= 2;
     return false;
   };
   const typeLabel = PROPERTY_TYPES.find((t) => t.id === propertyType)?.label;
@@ -1371,22 +1511,51 @@ function Rundvis() {
       <main className="max-w-3xl mx-auto px-5 py-8">
         {step === 1 && (
           <section>
-            <h1 className="font-display text-2xl mb-1">Hvilken slags video?</h1>
-            <p className="text-sm mb-6" style={{ color: MUTED }}>Vælger tone og tempo for manuskript og fremvisning.</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {PROPERTY_TYPES.map((t) => (
-                <button key={t.id} onClick={() => setPropertyType(t.id)} className="text-left rounded-lg p-4 transition-colors"
-                  style={{ backgroundColor: propertyType === t.id ? ACCENT_SOFT : SURFACE, border: `1px solid ${propertyType === t.id ? ACCENT : LINE}` }}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-medium text-sm">{t.label}</span>
-                    {propertyType === t.id && <Icon name="check" size={15} style={{ color: ACCENT }} />}
-                  </div>
-                  <span className="text-xs" style={{ color: MUTED }}>{t.hint}</span>
-                </button>
-              ))}
+            <h1 className="font-display text-2xl mb-1">Hvilken video skal vi lave?</h1>
+            <p className="text-sm mb-6" style={{ color: MUTED }}>
+              Begge bruger samme klipning og samme formater. Forskellen er hvordan billederne bevæger sig.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {VIDEO_MODES.map((m) => {
+                const on = videoMode === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => setVideoMode(m.id)}
+                    className="text-left rounded-xl p-5 transition-colors h-full flex flex-col"
+                    style={{
+                      backgroundColor: on ? ACCENT_SOFT : SURFACE,
+                      border: `1px solid ${on ? ACCENT : LINE}`,
+                    }}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-display text-lg">{m.label}</span>
+                      {on && <Icon name="check" size={16} style={{ color: ACCENT }} />}
+                    </div>
+                    <span className="text-xs mb-3" style={{ color: on ? ACCENT : MUTED }}>{m.tagline}</span>
+                    <ul className="space-y-1.5 mb-3 flex-1">
+                      {m.points.map((p, i) => (
+                        <li key={i} className="flex gap-2 text-xs" style={{ color: TEXT }}>
+                          <span style={{ color: MUTED }}>·</span>
+                          <span>{p}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <span className="text-[11px]" style={{ color: MUTED }}>{m.bedst}</span>
+                  </button>
+                );
+              })}
             </div>
-            <button onClick={() => setStep(2)} disabled={!propertyType} className="mt-7 flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium"
-              style={{ backgroundColor: propertyType ? ACCENT : SURFACE_2, color: propertyType ? "#fff" : MUTED, cursor: propertyType ? "pointer" : "not-allowed" }}>
+            <button
+              onClick={() => setStep(2)}
+              disabled={!videoMode}
+              className="mt-7 flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium"
+              style={{
+                backgroundColor: videoMode ? ACCENT : SURFACE_2,
+                color: videoMode ? "#fff" : MUTED,
+                cursor: videoMode ? "pointer" : "not-allowed",
+              }}
+            >
               Fortsæt <Icon name="chevronRight" size={15} />
             </button>
           </section>
@@ -1422,7 +1591,7 @@ function Rundvis() {
             )}
             <div className="flex items-center gap-3 flex-wrap">
               <button onClick={() => setStep(1)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> Tilbage</button>
-              <button onClick={() => setStep(3)} disabled={images.length < 3} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium"
+              <button onClick={() => { setStep(3); runFlythrough(); }} disabled={images.length < 2} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium"
                 style={{ backgroundColor: images.length >= 3 ? ACCENT : SURFACE_2, color: images.length >= 3 ? "#fff" : MUTED, cursor: images.length >= 3 ? "pointer" : "not-allowed" }}>
                 Fortsæt <Icon name="chevronRight" size={15} />
               </button>
@@ -1436,65 +1605,7 @@ function Rundvis() {
           </section>
         )}
 
-        {step === 3 && (
-          <section>
-            <h1 className="font-display text-2xl mb-1">Manuskript</h1>
-            <p className="text-sm mb-6" style={{ color: MUTED }}>Udfyld detaljer og generér forslag til voiceover — ret linjerne til bagefter.</p>
-            {scenes.length === 0 && (
-              <div className="space-y-3 mb-6">
-                <div>
-                  <label className="text-xs block mb-1" style={{ color: MUTED }}>Adresse</label>
-                  <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Fx Strandvejen 12, 2900 Hellerup"
-                    className="w-full rounded-md px-3 py-2 text-sm outline-none" style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}`, color: TEXT }} />
-                </div>
-                <div>
-                  <label className="text-xs block mb-1" style={{ color: MUTED }}>Mæglernavn</label>
-                  <input value={agentName} onChange={(e) => setAgentName(e.target.value)} placeholder="Fx Mette Holm, Home Hellerup"
-                    className="w-full rounded-md px-3 py-2 text-sm outline-none" style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}`, color: TEXT }} />
-                </div>
-                <div>
-                  <label className="text-xs block mb-1" style={{ color: MUTED }}>Nøgledetaljer fra salgsopstilling (valgfrit)</label>
-                  <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Fx 4 værelser, sydvendt terrasse, nyt køkken 2023, gåafstand til station" rows={3}
-                    className="w-full rounded-md px-3 py-2 text-sm outline-none resize-none" style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}`, color: TEXT }} />
-                </div>
-                {genError && <p className="text-xs" style={{ color: AMBER }}>{genError}</p>}
-                <button onClick={generateScript} disabled={generating} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium" style={{ backgroundColor: ACCENT, color: "#fff" }}>
-                  {generating ? <><Icon name="loader" size={15} /> Genererer…</> : <><Icon name="sparkles" size={15} /> Generér manuskript</>}
-                </button>
-              </div>
-            )}
-            {scenes.length > 0 && (
-              <>
-                <div className="space-y-3 mb-6">
-                  {scenes.map((scene, idx) => (
-                    <div key={scene.imageId} className="flex gap-3 rounded-md p-2" style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}` }}>
-                      <img src={images.find((i) => i.id === scene.imageId)?.src} alt="" className="rounded object-cover shrink-0" style={{ width: 64, height: 64 }} />
-                      <div className="flex-1">
-                        <span className="text-[10px]" style={{ color: MUTED }}>Scene {idx + 1}</span>
-                        <textarea value={scene.text} onChange={(e) => updateScene(idx, e.target.value)} rows={2}
-                          className="w-full bg-transparent text-sm outline-none resize-none mt-0.5" style={{ color: TEXT }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <button onClick={() => { setScenes([]); setGenError(""); setVoices([]); }} className="flex items-center gap-1.5 text-xs mb-6" style={{ color: MUTED }}>
-                  <Icon name="rotate" size={12} /> Start manuskript forfra
-                </button>
-              </>
-            )}
-            <div className="flex items-center gap-3 flex-wrap">
-              <button onClick={() => setStep(2)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> Tilbage</button>
-              {scenes.length > 0 && (
-                <button onClick={() => setStep(4)} disabled={!scenes.every((s) => s.text)} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium"
-                  style={{ backgroundColor: scenes.every((s) => s.text) ? ACCENT : SURFACE_2, color: scenes.every((s) => s.text) ? "#fff" : MUTED }}>
-                  Gå til afspilning <Icon name="chevronRight" size={15} />
-                </button>
-              )}
-            </div>
-          </section>
-        )}
-
-        {step === 4 && (images.length >= 2 || scenes.length > 0) && (
+        {step === 3 && images.length >= 2 && (
           <section>
             {scenes.length > 0 && (
               <>
@@ -1653,7 +1764,7 @@ function Rundvis() {
                 </div>
               )}
 
-              {flythroughStatus === "done" && flythroughStills.length > 0 && (
+              {videoMode === "highend" && flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="mb-5 p-4 rounded-xl" style={{ backgroundColor: SURFACE_2, border: `1px solid ${LINE}` }}>
                   <p className="text-sm mb-1" style={{ color: TEXT }}>Ægte kamerabevægelse gennem rummene</p>
                   <p className="text-[11px] mb-3" style={{ color: MUTED }}>
@@ -1879,6 +1990,51 @@ function Rundvis() {
               )}
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
+                <div className="mb-5 p-4 rounded-xl" style={{ backgroundColor: SURFACE_2, border: `1px solid ${LINE}` }}>
+                  <p className="text-sm mb-1" style={{ color: TEXT }}>Musik</p>
+                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>
+                    Klipningen ligger på et fast beat, så en hvilken som helst rolig track falder i
+                    hak med klippene. Musikken lægges ind i den fil du henter — ikke kun i previewet.
+                  </p>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label
+                      className="flex items-center gap-2 px-4 py-2 rounded-full text-sm cursor-pointer"
+                      style={{ border: `1px solid ${LINE}`, color: TEXT }}
+                    >
+                      <Icon name="music" size={14} />
+                      {musicName ? "Skift musik" : "Vælg lydfil"}
+                      <input
+                        type="file"
+                        accept="audio/*"
+                        className="hidden"
+                        onChange={(e) => handleMusicFile(e.target.files && e.target.files[0])}
+                      />
+                    </label>
+
+                    {musicName && (
+                      <button
+                        onClick={() => setMusicOnPreview((v) => !v)}
+                        className="flex items-center gap-1.5 text-xs"
+                        style={{ color: musicOnPreview ? ACCENT : MUTED }}
+                      >
+                        <Icon name="volume" size={13} /> {musicOnPreview ? "Lyd til i preview" : "Lyd fra i preview"}
+                      </button>
+                    )}
+                  </div>
+
+                  {musicName && <p className="text-[11px] mt-2" style={{ color: TEXT }}>{musicName}</p>}
+                  {musicError && <p className="text-xs mt-2" style={{ color: AMBER }}>{musicError}</p>}
+                  {!musicName && !musicError && (
+                    <p className="text-[10px] mt-2" style={{ color: MUTED }}>
+                      Brug musik du har rettighederne til — videoen skal offentliggøres. Er tracket kortere
+                      end videoen, gentages det, og det tones ud til sidst.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="mb-4">
                   <p className="text-xs mb-2" style={{ color: TEXT }}>Hent som videofil</p>
                   <div className="flex flex-wrap gap-2 mb-2">
@@ -1947,7 +2103,7 @@ function Rundvis() {
               )}
             </div>
 
-<button onClick={() => setStep(scenes.length > 0 ? 3 : 2)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm mt-6" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> {scenes.length > 0 ? "Ret manuskript" : "Tilbage til billeder"}</button>
+<button onClick={() => setStep(2)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm mt-6" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> Tilbage til billeder</button>
           </section>
         )}
       </main>
