@@ -311,18 +311,44 @@ const GRADE_WARM = "rgba(255, 216, 170, 0.10)";
 //
 // Held to half-beats, which are still on the music.
 function paceBeats(i, count) {
-  if (count <= 3) return 5;
+  if (count <= 3) return 6;
   const p = (i - 1) / Math.max(1, count - 3);        // 0 at the first interior, 1 at the last
   const openness = 1 - Math.sin(Math.PI * clamp01(p)); // 1 at both ends, 0 across the middle
   // A little jitter so the arc is felt rather than counted, fixed per position so a rebuild of
   // the same property cuts identically.
   const jitter = (seededRandom(i * 19.4 + 3.1) - 0.5) * 0.8;
-  return Math.max(2.5, Math.round((3 + openness * 2.5 + jitter) * 2) / 2);
+  // Raised from 3 + 2.5 * openness. The middle was running 1.3-1.5 seconds a shot, which is
+  // quick even by listing-video standards and left no time to actually look at a room.
+  return Math.max(3, Math.round((4 + openness * 3 + jitter) * 2) / 2);
 }
 
-function buildEditPlan(count) {
+// A CLIP IS FIVE SECONDS. The shot showing it was usually on screen for under three, so nearly
+// half of every generated clip was paid for and never seen. A shot carrying a clip therefore
+// holds longer - a BONUS on top of its place in the arc rather than a flat floor, so a partly
+// upgraded property keeps its shape: upgraded rooms run ~4.7s against ~1.9s for the quick ones.
+//
+// UPGRADING EVERY ROOM DOES flatten the arc, and that is a deliberate trade, not an oversight.
+// Every shot then hits the cap and the film becomes a run of ~4.7s shots. The cap is the length
+// of the clip, so the only way to keep the ends longest under a full upgrade is to hold the
+// middle shots BELOW what was paid for them - which is the exact waste this whole thing exists to
+// remove. Utilisation wins. The arc is intact in the free edit and in the selective upgrade,
+// which is the path the interface steers towards anyway.
+//
+// Capped at 9 beats (4.66s) against a nominal 5-second clip. The obvious cap was 9.5 beats, which
+// uses 98% of the clip - but "5s" is what we ask Luma for, not a guarantee of what comes back, and
+// a shot outlasting its own footage parks on a frozen last frame. That park is the clearest
+// slideshow tell there is, and it would land on exactly the shots that were paid for. The third of
+// a second given up here buys 93% utilisation instead of 98% with nothing to go wrong.
+//
+// Above ~3s the start offset in clipStartFor drops to zero as well, so these shots open on the
+// photograph exactly - the most faithful frame there is.
+const CLIP_BONUS_BEATS = 2.5;
+const CLIP_MAX_BEATS = 9;
+
+function buildEditPlan(count, hasClip) {
   if (count === 0) return [];
   const beats = (n) => Math.round(n * BEAT_MS);
+  const carries = typeof hasClip === "function" ? hasClip : () => false;
   const plan = [];
 
   const T = KB_TRAVEL;
@@ -337,13 +363,13 @@ function buildEditPlan(count) {
       // thing the viewer sees is the photograph exactly as the agent shot it.
       // Eight beats, over four seconds. The opening shot is the one the viewer decides on, and
       // cutting away from it quickly is how a film announces that it is in a hurry.
-      type = "push"; nBeats = 8;
+      type = "push"; nBeats = 9;
       zFrom = 1.0; zTo = 1.07;
       fromU = { x: 0, y: 0 }; toU = { x: 0.18, y: -0.12 };
     } else if (isLast) {
       // Close by pulling back out to the full frame again, rising slightly: the standard
       // "leave the room" move, and it ends on an uncropped picture.
-      type = "pull"; nBeats = 8;
+      type = "pull"; nBeats = 9;
       zFrom = 1.08; zTo = 1.0;
       fromU = { x: -0.2 * d, y: 0.45 }; toU = { x: 0, y: -0.1 };
     } else {
@@ -412,6 +438,14 @@ function buildEditPlan(count) {
         fromU = { x: T * 0.3 * d * v, y: T * 0.25 * d * v }; toU = { x: -T * 0.3 * d * v, y: -T * 0.25 * d * v };
       }
     }
+
+    if (carries(i)) nBeats = Math.min(CLIP_MAX_BEATS, nBeats + CLIP_BONUS_BEATS);
+
+    // The zoom ceiling, applied here rather than trusted shot by shot. KB_MAX_ZOOM was only ever
+    // used to prescale the image plate; nothing enforced it on the moves themselves, so "lean"
+    // reached 1.13 - a 13% crop where 10% was documented, and resampled above 1:1 off a plate
+    // built for 1.1, which is the one thing this whole approach exists to avoid.
+    zFrom = Math.min(zFrom, KB_MAX_ZOOM); zTo = Math.min(zTo, KB_MAX_ZOOM);
 
     plan.push({ type, dirSign: d, zFrom, zTo, fromU, toU, durationMs: beats(nBeats) });
   }
@@ -1473,9 +1507,17 @@ function Rundvis() {
   // models and nothing else.
 
   // The whole edit - shot design, beat-aligned durations, transitions and speed curves.
+  //
+  // Built twice, on purpose. The played edit knows which rooms have a generated clip, because
+  // those shots hold longer. The plan the ROOM CHOICE is made from does not: letting the choice
+  // see the clips would feed it its own output - lengthening a shot would change which shots look
+  // worth upgrading next, and the "selected rooms" list would reshuffle under the agent between
+  // one click and the next.
+  const basePlan = useMemo(() => buildEditPlan(flythroughStills.length), [flythroughStills.length]);
+  const clipSignature = (hqClips || []).map((c) => (c ? 1 : 0)).join("");
   const flythroughParams = useMemo(
-    () => buildEditPlan(flythroughStills.length),
-    [flythroughStills.length]
+    () => buildEditPlan(flythroughStills.length, (i) => !!(hqClips && hqClips[i])),
+    [flythroughStills.length, clipSignature]
   );
 
   // WHICH ROOMS TO PAY FOR, when upgrading a selection rather than all of them.
@@ -1501,10 +1543,10 @@ function Rundvis() {
   // across the running time and still picks the shot in each stretch that is on screen longest.
   const HQ_HIGHLIGHTS = 6;
   const hqHighlightIndexes = useMemo(() => {
-    const total = flythroughParams.length;
+    const total = basePlan.length;
     if (total === 0) return [];
     const free = (i) => !(hqClips && hqClips[i]);
-    if (total <= HQ_HIGHLIGHTS) return flythroughParams.map((_, i) => i).filter(free);
+    if (total <= HQ_HIGHLIGHTS) return basePlan.map((_, i) => i).filter(free);
 
     const out = [];
     for (let seg = 0; seg < HQ_HIGHLIGHTS; seg++) {
@@ -1513,12 +1555,12 @@ function Rundvis() {
       let best = -1;
       for (let i = from; i < to; i++) {
         if (!free(i)) continue;
-        if (best === -1 || flythroughParams[i].durationMs > flythroughParams[best].durationMs) best = i;
+        if (best === -1 || basePlan[i].durationMs > basePlan[best].durationMs) best = i;
       }
       if (best !== -1) out.push(best);
     }
     return out;
-  }, [flythroughParams, hqClips]);
+  }, [basePlan, hqClips]);
 
   // ---- High-quality pass ----
   // Sends every photo to the video model and collects the finished clips. Sequential on purpose:
@@ -1731,7 +1773,7 @@ function Rundvis() {
         {step === 1 && (
           <section>
             <h1 className="font-display text-2xl mb-1">Læg boligens billeder ind</h1>
-            <p className="text-sm mb-6" style={{ color: MUTED }}>10–20 billeder giver det bedste resultat. Rækkefølgen bliver scenerækkefølgen.</p>
+            <p className="text-sm mb-6" style={{ color: MUTED }}>Fra 3 billeder og op. Rækkefølgen bliver scenerækkefølgen.</p>
             <div onClick={() => fileInputRef.current?.click()} onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); }}
               className="rounded-lg p-8 text-center cursor-pointer mb-5" style={{ border: `1.5px dashed ${LINE}`, backgroundColor: SURFACE }}>
@@ -1757,7 +1799,7 @@ function Rundvis() {
               </div>
             )}
             <div className="flex items-center gap-3 flex-wrap">
-              <button onClick={() => { setStep(2); runFlythrough(); }} disabled={images.length < 2} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium"
+              <button onClick={() => { setStep(2); runFlythrough(); }} disabled={images.length < 3} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium"
                 style={{ backgroundColor: images.length >= 3 ? ACCENT : SURFACE_2, color: images.length >= 3 ? "#fff" : MUTED, cursor: images.length >= 3 ? "pointer" : "not-allowed" }}>
                 Lav min video <Icon name="chevronRight" size={15} />
               </button>
