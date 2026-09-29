@@ -48,34 +48,8 @@ const PROPERTY_TYPES = [
 // Three steps, in the order the work actually happens. The old flow had four, two of which
 // (property type, script) only fed a voiceover feature that the walkthrough never used - so they
 // asked the agent for decisions that changed nothing they could see.
-const STEPS = [{ id: 1, label: "Videotype" }, { id: 2, label: "Billeder" }, { id: 3, label: "Video" }];
+const STEPS = [{ id: 1, label: "Billeder" }, { id: 2, label: "Video" }];
 
-// The two products, chosen up front because everything downstream differs: what it costs, how
-// long it takes, and whether a video service is involved at all.
-const VIDEO_MODES = [
-  {
-    id: "basic",
-    label: "Basic",
-    tagline: "Gratis · klar med det samme",
-    points: [
-      "Zoom og panorering hen over dine fotos",
-      "Intet forvrænges — lige linjer forbliver lige",
-      "Filmisk klipning med beat og overgange",
-    ],
-    bedst: "Til hverdagens boliger.",
-  },
-  {
-    id: "highend",
-    label: "High-end",
-    tagline: "Fra ~0,45 $ pr. klip · nogle minutter",
-    points: [
-      "Kameraet bevæger sig faktisk gennem rummet",
-      "Samme klipning og formater som Basic",
-      "Test ét billede før du kører hele boligen",
-    ],
-    bedst: "Til liebhaverboliger.",
-  },
-];
 const FALLBACK_SCENE_MS = 6000;
 
 function seededRandom(seed) {
@@ -833,7 +807,8 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
 
 function Rundvis() {
   const [step, setStep] = useState(1);
-  const [videoMode, setVideoMode] = useState(null); // basic | highend
+  // No mode choice. The free video is made the moment the photos are in, and paying for real
+  // camera movement is an upgrade afterwards - once there is something to compare it against.
   const [propertyType, setPropertyType] = useState("villa"); // kept for the legacy script path
   const [images, setImages] = useState([]);
   const [address, setAddress] = useState("");
@@ -1232,7 +1207,7 @@ function Rundvis() {
   useEffect(() => {
     const a = previewAudioRef.current;
     if (!a) return;
-    const spiller = step === 3 && musicOnPreview && flythroughStatus === "done";
+    const spiller = step === 2 && musicOnPreview && flythroughStatus === "done";
     if (spiller) { a.currentTime = 0; a.play().catch(() => {}); } else { a.pause(); }
     return () => { a.pause(); };
   }, [step, musicOnPreview, flythroughStatus, musicName]);
@@ -1412,12 +1387,7 @@ function Rundvis() {
     setIsPlaying(true);
   };
 
-  const canGoStep = (n) => {
-    if (n === 1) return true;
-    if (n === 2) return !!videoMode;
-    if (n === 3) return !!videoMode && images.length >= 2;
-    return false;
-  };
+  const canGoStep = (n) => (n === 1 ? true : images.length >= 2);
   const typeLabel = PROPERTY_TYPES.find((t) => t.id === propertyType)?.label;
 
   return (
@@ -1444,59 +1414,7 @@ function Rundvis() {
       <main className="max-w-3xl mx-auto px-5 py-8">
         {step === 1 && (
           <section>
-            <h1 className="font-display text-2xl mb-1">Hvilken video skal vi lave?</h1>
-            <p className="text-sm mb-6" style={{ color: MUTED }}>
-              Begge bruger samme klipning og samme formater. Forskellen er hvordan billederne bevæger sig.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {VIDEO_MODES.map((m) => {
-                const on = videoMode === m.id;
-                return (
-                  <button
-                    key={m.id}
-                    onClick={() => setVideoMode(m.id)}
-                    className="text-left rounded-xl p-5 transition-colors h-full flex flex-col"
-                    style={{
-                      backgroundColor: on ? ACCENT_SOFT : SURFACE,
-                      border: `1px solid ${on ? ACCENT : LINE}`,
-                    }}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-display text-lg">{m.label}</span>
-                      {on && <Icon name="check" size={16} style={{ color: ACCENT }} />}
-                    </div>
-                    <span className="text-xs mb-3" style={{ color: on ? ACCENT : MUTED }}>{m.tagline}</span>
-                    <ul className="space-y-1.5 mb-3 flex-1">
-                      {m.points.map((p, i) => (
-                        <li key={i} className="flex gap-2 text-xs" style={{ color: TEXT }}>
-                          <span style={{ color: MUTED }}>·</span>
-                          <span>{p}</span>
-                        </li>
-                      ))}
-                    </ul>
-                    <span className="text-[11px]" style={{ color: MUTED }}>{m.bedst}</span>
-                  </button>
-                );
-              })}
-            </div>
-            <button
-              onClick={() => setStep(2)}
-              disabled={!videoMode}
-              className="mt-7 flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium"
-              style={{
-                backgroundColor: videoMode ? ACCENT : SURFACE_2,
-                color: videoMode ? "#fff" : MUTED,
-                cursor: videoMode ? "pointer" : "not-allowed",
-              }}
-            >
-              Fortsæt <Icon name="chevronRight" size={15} />
-            </button>
-          </section>
-        )}
-
-        {step === 2 && (
-          <section>
-            <h1 className="font-display text-2xl mb-1">Upload boligbilleder</h1>
+            <h1 className="font-display text-2xl mb-1">Læg boligens billeder ind</h1>
             <p className="text-sm mb-6" style={{ color: MUTED }}>10–20 billeder giver det bedste resultat. Rækkefølgen bliver scenerækkefølgen.</p>
             <div onClick={() => fileInputRef.current?.click()} onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); }}
@@ -1523,10 +1441,9 @@ function Rundvis() {
               </div>
             )}
             <div className="flex items-center gap-3 flex-wrap">
-              <button onClick={() => setStep(1)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> Tilbage</button>
-              <button onClick={() => { setStep(3); runFlythrough(); }} disabled={images.length < 2} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium"
+              <button onClick={() => { setStep(2); runFlythrough(); }} disabled={images.length < 2} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium"
                 style={{ backgroundColor: images.length >= 3 ? ACCENT : SURFACE_2, color: images.length >= 3 ? "#fff" : MUTED, cursor: images.length >= 3 ? "pointer" : "not-allowed" }}>
-                Fortsæt <Icon name="chevronRight" size={15} />
+                Lav min video <Icon name="chevronRight" size={15} />
               </button>
               {images.length > 0 && images.length < 3 && <span className="text-xs" style={{ color: MUTED }}>Mindst 3 billeder</span>}
             </div>
@@ -1538,7 +1455,7 @@ function Rundvis() {
           </section>
         )}
 
-        {step === 3 && images.length >= 2 && (
+        {step === 2 && images.length >= 2 && (
           <section>
             {scenes.length > 0 && (
               <>
@@ -1616,13 +1533,13 @@ function Rundvis() {
             )}
 
             <div className={scenes.length > 0 ? "pt-6 mt-2 border-t" : ""} style={{ borderColor: LINE }}>
-              {scenes.length === 0 && <h1 className="font-display text-2xl mb-1">Filmisk gennemgang</h1>}
+              {scenes.length === 0 && <h1 className="font-display text-2xl mb-1">Din video</h1>}
               {scenes.length > 0 && <h2 className="font-display text-lg mb-1">Filmisk gennemgang</h2>}
               <p className="text-xs mb-1" style={{ color: MUTED }}>
-                Op til {MAX_FLYTHROUGH_IMAGES} billeder klippet sammen med bevægelse, rytme og overgange.
+                Klar til at hente. Vil du have kameraet til at bevæge sig gennem rummene, kan du opgradere nedenfor.
               </p>
               <p className="text-xs mb-1" style={{ color: MUTED }}>
-                Billederne forvrænges aldrig — kameraet flytter kun udsnittet, så lige linjer forbliver lige.
+
               </p>
               {images.length >= 1 && flythroughStatus === "idle" && (
                 <p className="text-xs mb-4" style={{ color: MUTED }}>
@@ -1632,13 +1549,13 @@ function Rundvis() {
 
               {flythroughStatus === "idle" && (
                 <button onClick={() => runFlythrough()} className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium" style={{ backgroundColor: ACCENT, color: "#fff" }}>
-                  <Icon name="sparkles" size={15} /> Lav gennemgang
+                  <Icon name="rotate" size={15} /> Lav videoen
                 </button>
               )}
 
               {flythroughStatus === "processing" && (
                 <div className="flex items-center gap-2 text-sm mb-4" style={{ color: MUTED }}>
-                  <Icon name="loader" size={15} /> Klargør billede {flythroughProgress.current} af {flythroughProgress.total}…
+                  <Icon name="loader" size={15} /> Laver din video…
                 </div>
               )}
 
@@ -1697,9 +1614,12 @@ function Rundvis() {
                 </div>
               )}
 
-              {videoMode === "highend" && flythroughStatus === "done" && flythroughStills.length > 0 && (
+              {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="mb-5 p-4 rounded-xl" style={{ backgroundColor: SURFACE_2, border: `1px solid ${LINE}` }}>
-                  <p className="text-sm mb-3" style={{ color: TEXT }}>Ægte kamerabevægelse</p>
+                  <p className="text-sm mb-1" style={{ color: TEXT }}>Opgradér: ægte kamerabevægelse</p>
+                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>
+                    Hvert billede bliver til et klip hvor kameraet faktisk bevæger sig i rummet. Samme klipning, samme formater.
+                  </p>
 
                   {hqStatus !== "working" && (
                     <div className="mb-3">
@@ -1755,7 +1675,7 @@ function Rundvis() {
                         className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium"
                         style={{ border: `1px solid ${ACCENT}`, color: ACCENT }}
                       >
-                        <Icon name="film" size={14} /> Test ét billede
+                        <Icon name="film" size={14} /> Prøv ét billede
                       </button>
                       <button
                         onClick={() => runHighQuality()}
@@ -1763,7 +1683,7 @@ function Rundvis() {
                         style={{ backgroundColor: ACCENT, color: "#fff" }}
                       >
                         <Icon name="sparkles" size={14} />
-                        Generér alle {flythroughStills.length}
+                        Opgradér hele videoen
                       </button>
                     </div>
                   )}
@@ -1910,7 +1830,7 @@ function Rundvis() {
               )}
             </div>
 
-<button onClick={() => setStep(2)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm mt-6" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> Tilbage til billeder</button>
+<button onClick={() => setStep(1)} className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm mt-6" style={{ border: `1px solid ${LINE}`, color: MUTED }}><Icon name="chevronLeft" size={15} /> Tilbage til billeder</button>
           </section>
         )}
       </main>
