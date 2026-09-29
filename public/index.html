@@ -1417,7 +1417,14 @@ function Rundvis() {
       await Promise.all(Array.from({ length: Math.min(HQ_CONCURRENCY, koe.length) }, arbejder));
 
       if (fejl.length) {
-        setHqError(`${fejl.length} af ${indexes.length} klip fejlede. ${fejl[0]}${fejl.length > 1 ? " (og flere)" : ""} Resten er gemt.`);
+        // Show the distinct reasons rather than only the first: when all clips fail the same
+        // way that is one line, and when they fail differently that difference is the clue.
+        const unikke = [...new Set(fejl.map((f) => f.replace(/^Billede \d+: /, "")))];
+        setHqError(
+          `${fejl.length} af ${indexes.length} klip fejlede. ` +
+          unikke.slice(0, 2).join(" — ") +
+          (unikke.length > 2 ? ` (+${unikke.length - 2} andre årsager)` : "")
+        );
         setHqStatus(clips.some(Boolean) ? "done" : "error");
       } else {
         setHqStatus("done");

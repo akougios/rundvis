@@ -32,6 +32,18 @@ const NEGATIVE_PROMPT =
   "furniture, flickering, changing layout, new objects appearing, people, animals, text, " +
   "watermark, logo, blur, low quality, camera shake, fast motion, zoom jitter";
 
+// A plain-language reading of the status codes these services actually return, for the case
+// where the body is empty and the number is all we have.
+function forklarStatus(status) {
+  if (status === 401 || status === 403) return "nøglen blev afvist — tjek at FAL_KEY er sat korrekt og er aktiv.";
+  if (status === 402) return "der er ikke penge nok på kontoen hos udbyderen.";
+  if (status === 404) return "modellen findes ikke på den adresse — model-id'et er sandsynligvis forkert.";
+  if (status === 422) return "et af felterne blev afvist af modellen (forkert type eller værdi).";
+  if (status === 429) return "for mange kald på for kort tid — prøv igen om lidt.";
+  if (status >= 500) return "udbyderen har en driftsforstyrrelse — prøv igen om lidt.";
+  return "intet svar fra udbyderen at vise.";
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Kun POST er tilladt." });
@@ -84,23 +96,37 @@ export default async function handler(req, res) {
       return;
     }
 
-    const r = await fetch(`https://queue.fal.run/${m.endpoint}`, {
-      method: "POST",
-      headers: falHeaders(key),
-      body: JSON.stringify(input),
-    });
+    // Retry on rate limiting. The app submits several clips at once to keep a 20-photo property
+    // under a quarter of an hour, and a burst is exactly what providers throttle - so a 429 is an
+    // expected part of normal operation here, not an error to hand the user.
+    let r, text;
+    for (let forsoeg = 0; ; forsoeg++) {
+      r = await fetch(`https://queue.fal.run/${m.endpoint}`, {
+        method: "POST",
+        headers: falHeaders(key),
+        body: JSON.stringify(input),
+      });
+      text = await r.text();
+      if (r.status !== 429 || forsoeg >= 4) break;
+      // Honour Retry-After when it is given; otherwise back off 2s, 4s, 8s, 16s.
+      const efter = Number(r.headers.get("retry-after"));
+      const vent = Number.isFinite(efter) && efter > 0 ? efter * 1000 : 2000 * Math.pow(2, forsoeg);
+      await new Promise((res2) => setTimeout(res2, Math.min(vent, 20000)));
+    }
 
-    const text = await r.text();
     let data;
     try { data = JSON.parse(text); } catch (e) { data = null; }
 
     if (!r.ok) {
-      // fal's validation errors name the offending field, which is exactly what is needed when
-      // a model's schema differs from what the registry assumed - so it is passed through
-      // rather than replaced with something generic.
-      const detail = (data && (data.detail || data.error || data.message)) || text.slice(0, 400);
+      // The STATUS CODE goes in the message, always. An earlier version passed through only the
+      // response body, so an error with an empty body - which is exactly what 401 and 402 look
+      // like - produced a blank message and hid the one fact needed to fix it.
+      const raw = (data && (data.detail || data.error || data.message)) ?? null;
+      const detail = raw == null || raw === ""
+        ? (text.slice(0, 400) || forklarStatus(r.status))
+        : (typeof raw === "string" ? raw : JSON.stringify(raw).slice(0, 400));
       res.status(r.status).json({
-        error: `${m.label} afviste kaldet: ${typeof detail === "string" ? detail : JSON.stringify(detail)}`,
+        error: `${m.label} afviste kaldet (HTTP ${r.status}): ${detail}`,
       });
       return;
     }
