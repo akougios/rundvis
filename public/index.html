@@ -249,9 +249,27 @@ function loadImageEl(src) {
 // around 117 BPM. Ours ran at 96 and felt slower than the target, so it now matches.
 const SHOW_BPM = 116;
 const BEAT_MS = 60000 / SHOW_BPM;         // ~517ms
-const DISSOLVE_MS = 340;                  // short enough to feel like an edit, not a fade
+const DISSOLVE_MS = 460;                  // longer now that dissolves are rare and deliberate
 const SHOW_FADE_MS = 520;                 // up from black at the top, down at the tail
 const VIGNETTE = 0.26;                    // corner darkening; reads as "graded" rather than flat
+
+// THE GRADE. A vignette alone is not a grade, and ungraded footage is the single clearest tell
+// that a property video was made by software rather than shot. This is the standard clean
+// architectural look: a little more contrast and colour, highlights warmed, shadows lifted off
+// pure black and cooled slightly.
+//
+// Done with canvas filters and two composited fills rather than per-pixel work. Reading and
+// writing 1920x1080 pixels thirty times a second in JavaScript would not hold frame rate; these
+// are GPU paths and cost almost nothing.
+//
+// It runs over generated clips and stills alike, which is most of why the two read as one film
+// instead of as two sources cut together.
+const GRADE_FILTER = "contrast(1.06) saturate(1.07) brightness(1.01)";
+// Lifted, slightly cool black floor. Composited with "lighten", so it only touches pixels darker
+// than itself: shadows come off pure black - the filmic part - and everything else is untouched.
+const GRADE_LIFT = "rgb(12, 15, 22)";
+// Warm highlights, in soft-light so it lands on the bright end and leaves the shadows alone.
+const GRADE_WARM = "rgba(255, 216, 170, 0.10)";
 
 // Lays out the whole sequence at once. Doing it as one plan - rather than deriving each shot
 // independently the way parallaxPathFor used to - is what makes structure possible: an opening
@@ -260,6 +278,24 @@ const VIGNETTE = 0.26;                    // corner darkening; reads as "graded"
 //
 // Every duration is a whole number of beats, so all cuts land on one grid. That is what "cut to
 // the beat" means, and it holds whether or not music is playing over it.
+// THE TEMPO ARC. How long each shot holds, by where it falls in the film.
+//
+// A property film is not a metronome. It opens roomy so the viewer can take the place in, tightens
+// through the middle where the rooms are already established, then opens out again to land the
+// ending. Every shot running 4-5 beats regardless of position was the single thing that made this
+// read as a slideshow: correct on the beat, but with no shape over the two minutes.
+//
+// Held to half-beats, which are still on the music.
+function paceBeats(i, count) {
+  if (count <= 3) return 5;
+  const p = (i - 1) / Math.max(1, count - 3);        // 0 at the first interior, 1 at the last
+  const openness = 1 - Math.sin(Math.PI * clamp01(p)); // 1 at both ends, 0 across the middle
+  // A little jitter so the arc is felt rather than counted, fixed per position so a rebuild of
+  // the same property cuts identically.
+  const jitter = (seededRandom(i * 19.4 + 3.1) - 0.5) * 0.8;
+  return Math.max(2.5, Math.round((3 + openness * 2.5 + jitter) * 2) / 2);
+}
+
 function buildEditPlan(count) {
   if (count === 0) return [];
   const beats = (n) => Math.round(n * BEAT_MS);
@@ -275,26 +311,43 @@ function buildEditPlan(count) {
     if (isFirst) {
       // Establishing shot: opens on the FULL frame - no crop at all - and eases in. The first
       // thing the viewer sees is the photograph exactly as the agent shot it.
-      type = "push"; nBeats = 6;
+      // Eight beats, over four seconds. The opening shot is the one the viewer decides on, and
+      // cutting away from it quickly is how a film announces that it is in a hurry.
+      type = "push"; nBeats = 8;
       zFrom = 1.0; zTo = 1.07;
       fromU = { x: 0, y: 0 }; toU = { x: 0.18, y: -0.12 };
     } else if (isLast) {
       // Close by pulling back out to the full frame again, rising slightly: the standard
       // "leave the room" move, and it ends on an uncropped picture.
-      type = "pull"; nBeats = 6;
+      type = "pull"; nBeats = 8;
       zFrom = 1.08; zTo = 1.0;
       fromU = { x: -0.2 * d, y: 0.45 }; toU = { x: 0, y: -0.1 };
     } else {
-      // SEVEN types on an odd-length cycle. Odd matters: direction alternates with i, so an
-      // even-length cycle would land every pan on the same parity and give them all the same
-      // direction. Seven also means the pattern does not visibly repeat inside one property.
+      // The move, chosen rather than cycled.
       //
-      // "orbit" is here although 2D cannot really orbit - it renders as an arcing travel, and
-      // becomes a true arc around the room once that shot is upgraded. That is the honest place
-      // to put a move the free version can only suggest: it is what the upgrade visibly buys.
-      const cycle = ["pan", "push", "orbit", "drift", "lean", "pan", "pullback"];
-      type = cycle[(i - 1) % cycle.length];
-      nBeats = i % 2 ? 4 : 5; // 2.1s / 2.6s alternating, so the rhythm never goes metronomic
+      // A fixed cycle repeats: with seven moves and eighteen rooms you see the identical run of
+      // seven two and a half times over, which is the sort of thing nobody can name but everyone
+      // notices. Instead each shot picks from the set under two rules an editor would apply
+      // without thinking - never the same move twice running, and never two moves of the same
+      // family back to back, so a push-in is not followed by a lean-in nor a pull-out by a
+      // pullback. Seeded on the position, so rebuilding the same property cuts identically.
+      //
+      // "orbit" is in the set although 2D cannot really orbit - it renders as an arcing travel,
+      // and becomes a true arc around the room once that shot is upgraded. That is the honest
+      // place to put a move the free version can only suggest: it is what the upgrade buys.
+      const family = { push: "in", lean: "in", pull: "out", pullback: "out", pan: "across", orbit: "around", drift: "up" };
+      const prev = plan[i - 1] ? plan[i - 1].type : "push";
+      const ALL = ["pan", "push", "orbit", "drift", "lean", "pullback"];
+      const recent = plan.slice(-3).map((q) => q.type);
+      const legal = ALL.filter((m) => m !== prev && family[m] !== family[prev]);
+      // Also prefer something not used in the last three shots. Without this the draw clumps -
+      // one run came out with six pans in sixteen shots and not a single lean - which looks
+      // less varied than the fixed cycle this replaced. Falls back to the looser set when
+      // being this picky leaves nothing.
+      const fresh = legal.filter((m) => recent.indexOf(m) === -1);
+      const pool = fresh.length ? fresh : legal;
+      type = pool[Math.floor(seededRandom(i * 7.13 + 2.7) * pool.length) % pool.length];
+      nBeats = paceBeats(i, count);
 
       // Every shot gets its own amount, not just its own direction. Earlier all pushes moved
       // exactly 7% and all pans held zoom at zero, which reads as a template rather than as a
@@ -341,22 +394,35 @@ function buildEditPlan(count) {
 
   // Transitions. Mostly dissolves, with a hard cut every third shot for lift. The hard cut is
   // what stops a sequence of dissolves from turning into a lullaby.
+  // Cuts by default, dissolves by exception - the other way round from how this started.
+  //
+  // A sequence carried on dissolves reads as a wedding video: everything melts into everything
+  // else and nothing has an edge. High-end property films cut, hard and on the beat, and spend a
+  // dissolve only where it means something - moving INTO the property after the establishing
+  // shot, once across the middle to mark a change of part, and out to the closing shot.
   const lastIdx = count - 1;
-  const cuts = new Set();
-  for (let i = 3; i < count; i += 3) if (!(i === lastIdx && count > 2)) cuts.add(i);
-  // With only a handful of photos the every-third rule can land nothing at all, and an
-  // all-dissolve sequence goes soft. Put one hard cut near the middle in that case.
-  if (cuts.size === 0 && count >= 3) cuts.add(Math.max(1, Math.floor(count / 2)));
+  const dissolves = new Set();
+  if (count > 2) {
+    dissolves.add(1);                       // into the property
+    dissolves.add(lastIdx);                 // out to the closing shot
+    if (count >= 7) dissolves.add(Math.floor(count / 2)); // a breath across the middle
+  }
   plan.forEach((p, i) => {
-    p.transition = cuts.has(i) ? "cut" : "dissolve";
-    p.transitionMs = cuts.has(i) ? 0 : DISSOLVE_MS;
+    p.transition = dissolves.has(i) ? "dissolve" : "cut";
+    p.transitionMs = dissolves.has(i) ? DISSOLVE_MS : 0;
   });
 
-  // Speed curves follow from the cuts, not the other way round: accelerate into a hard cut,
-  // leave one already at speed. That pairing is the whole trick behind a "speed ramp".
+  // Speed curves follow the tempo arc rather than the cuts.
+  //
+  // They used to key off the cuts - accelerate into a hard one - which worked while cuts were
+  // rare. Now that cuts are the default, that rule would put an accelerating ramp under nearly
+  // every shot in the film, and a whole reel of shots all winding up is relentless to watch.
+  // Tying it to the arc instead means the tight middle shots carry the energy and the roomy
+  // shots at either end settle, which is the same thing an editor does by hand.
   plan.forEach((p, i) => {
-    const nextIsCut = i + 1 < plan.length && plan[i + 1].transition === "cut";
-    p.ease = nextIsCut ? "ramp" : p.transition === "cut" ? "settle" : "glide";
+    if (i === 0 || i === plan.length - 1) { p.ease = "settle"; return; }
+    const tight = p.durationMs <= 3.5 * BEAT_MS;
+    p.ease = tight ? "ramp" : p.transition === "dissolve" ? "glide" : "settle";
   });
 
   return plan;
@@ -373,6 +439,87 @@ function vignetteFor(octx, W, H) {
     _vigKey = key; _vigGrad = g;
   }
   return _vigGrad;
+}
+
+// Titles. The film is a deliverable an agent posts under their own name, and a walkthrough with
+// no address and no agent on it is footage rather than a product - so the address opens it and
+// the agent closes it, the way a produced property film is topped and tailed.
+//
+// Both are optional and empty by default. Type over a photograph is the easiest thing in this
+// whole pipeline to make look cheap, so: light weight, wide letter-spacing, sized relative to the
+// frame so it holds at 1080p and in the preview alike, and set over a soft scrim rather than
+// dropped straight onto the picture.
+const TITLE_FONT = '"Helvetica Neue", Inter, system-ui, -apple-system, sans-serif';
+
+function scrim(octx, W, H, from, strength) {
+  const g = octx.createLinearGradient(0, from === "bottom" ? H : 0, 0, from === "bottom" ? H * 0.55 : H * 0.45);
+  g.addColorStop(0, `rgba(0,0,0,${strength})`);
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  octx.fillStyle = g;
+  octx.fillRect(0, 0, W, H);
+}
+
+// Fades a caption up, holds it, and takes it away again, all within one shot.
+function captionAlpha(local, durationMs, inAt, holdMs) {
+  const FADE = 620;
+  if (local < inAt) return 0;
+  const since = local - inAt;
+  if (since < FADE) return since / FADE;
+  if (since < FADE + holdMs) return 1;
+  const out = since - FADE - holdMs;
+  return out < FADE ? 1 - out / FADE : 0;
+}
+
+function drawTitles(octx, W, H, titles, idx, lastIdx, local, durationMs) {
+  if (!titles) return;
+  const head = (titles.headline || "").trim();
+  const agent = (titles.agent || "").trim();
+  const opening = idx === 0 && head;
+  const closing = idx === lastIdx && lastIdx > 0 && (agent || head);
+  if (!opening && !closing) return;
+
+  const a = opening
+    ? captionAlpha(local, durationMs, 900, Math.max(600, durationMs - 3000))
+    : captionAlpha(local, durationMs, 700, Math.max(900, durationMs - 2200));
+  if (a <= 0.002) return;
+
+  octx.save();
+  octx.globalAlpha = a;
+  octx.textBaseline = "alphabetic";
+
+  if (opening) {
+    // Lower left, the way a location card sits.
+    scrim(octx, W, H, "bottom", 0.42 * a);
+    const size = Math.round(W * 0.042);
+    octx.globalAlpha = a;
+    octx.fillStyle = "rgba(255,255,255,0.97)";
+    octx.font = `300 ${size}px ${TITLE_FONT}`;
+    if ("letterSpacing" in octx) octx.letterSpacing = `${Math.round(size * 0.02)}px`;
+    octx.textAlign = "left";
+    octx.fillText(head, Math.round(W * 0.07), Math.round(H * 0.88));
+  } else {
+    // Centred end card, the address small above the name.
+    scrim(octx, W, H, "bottom", 0.5 * a);
+    octx.textAlign = "center";
+    const cx = Math.round(W / 2);
+    if (head) {
+      const small = Math.round(W * 0.021);
+      octx.fillStyle = "rgba(255,255,255,0.72)";
+      octx.font = `400 ${small}px ${TITLE_FONT}`;
+      if ("letterSpacing" in octx) octx.letterSpacing = `${Math.round(small * 0.18)}px`;
+      octx.fillText(head.toUpperCase(), cx, Math.round(H * 0.79));
+    }
+    if (agent) {
+      const size = Math.round(W * 0.046);
+      octx.fillStyle = "rgba(255,255,255,0.97)";
+      octx.font = `300 ${size}px ${TITLE_FONT}`;
+      if ("letterSpacing" in octx) octx.letterSpacing = `${Math.round(size * 0.02)}px`;
+      octx.fillText(agent, cx, Math.round(H * 0.86));
+    }
+  }
+
+  if ("letterSpacing" in octx) octx.letterSpacing = "0px";
+  octx.restore();
 }
 
 // Composes ONE frame of the finished show onto a 2D context: the right shot at the right point
@@ -399,6 +546,9 @@ function composeShowFrame(octx, W, H, shots, tMs, opts) {
   syncShowVideos(shots, idx, local);
 
   octx.globalAlpha = 1;
+  // Contrast and saturation ride on the draw itself, so a dissolve grades both shots identically
+  // and the blend happens between two already-graded images.
+  octx.filter = GRADE_FILTER;
   if (fade > 0 && local < fade && shots.length > 1) {
     // Hold the outgoing shot underneath at its final frame and bring this one up over it.
     const prev = shots[(idx - 1 + shots.length) % shots.length];
@@ -406,10 +556,25 @@ function composeShowFrame(octx, W, H, shots, tMs, opts) {
     octx.globalAlpha = clamp01(local / fade);
   }
   drawShot2D(octx, W, H, shot, local / shot.spec.durationMs);
+  octx.filter = "none";
   octx.globalAlpha = 1;
+
+  // Shadows off pure black and slightly cool, then highlights warmed. Order matters: lifting
+  // first means the warmth lands on a shadow that already has some light in it.
+  octx.globalCompositeOperation = "lighten";
+  octx.fillStyle = GRADE_LIFT;
+  octx.fillRect(0, 0, W, H);
+  octx.globalCompositeOperation = "soft-light";
+  octx.fillStyle = GRADE_WARM;
+  octx.fillRect(0, 0, W, H);
+  octx.globalCompositeOperation = "source-over";
 
   octx.fillStyle = vignetteFor(octx, W, H);
   octx.fillRect(0, 0, W, H);
+
+  // Before the top-and-tail fade, so the title comes up out of black with the picture rather
+  // than sitting on top of it.
+  drawTitles(octx, W, H, opts && opts.titles, idx, shots.length - 1, local, shot.spec.durationMs);
 
   // Up from black at the top and down at the tail. In the looping preview this reads as a
   // deliberate top-and-tail rather than a seam.
@@ -548,7 +713,11 @@ function releaseShot(shot) {
 //
 // Composition goes through composeShowFrame, the same function the exporter uses, so the file
 // that is downloaded is frame for frame what was on screen.
-function FlythroughStage({ stills, specs, clips, onError }) {
+function FlythroughStage({ stills, specs, clips, onError, titles }) {
+  // Held in a ref, not a dependency: typing an address must update the frame on the next tick,
+  // not tear down the canvas and rebuild every plate on each keystroke.
+  const titlesRef = React.useRef(titles);
+  titlesRef.current = titles;
   const hostRef = useRef(null);
 
   useEffect(() => {
@@ -625,7 +794,7 @@ function FlythroughStage({ stills, specs, clips, onError }) {
         if (disposed) return;
         raf = requestAnimationFrame(tick);
         if (!refit() || !shots) return;
-        composeShowFrame(octx, W, H, shots, performance.now() - t0);
+        composeShowFrame(octx, W, H, shots, performance.now() - t0, { titles: titlesRef.current });
       };
       raf = requestAnimationFrame(tick);
     };
@@ -682,7 +851,7 @@ const HIDDEN_TAB_MSG =
   "Optagelsen kræver at denne fane er fremme. Browseren sætter canvas-optagelse på pause i en " +
   "baggrundsfane, og filen bliver tom. Lad fanen være synlig, og prøv igen.";
 
-async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, onProgress, musicBytes }) {
+async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, onProgress, musicBytes, titles }) {
   if (!window.MediaRecorder) throw new Error("Din browser understøtter ikke videooptagelse. Prøv Chrome eller Safari 17+.");
   const mime = pickRecorderMime();
   if (!mime) throw new Error("Din browser kan ikke optage video fra et canvas.");
@@ -794,7 +963,7 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
         if (wentHidden) break;
         const tMs = (f / fps) * 1000;
         // Same composer as the live preview, so the file is frame for frame what was on screen.
-        composeShowFrame(octx, w, h, shots, tMs);
+        composeShowFrame(octx, w, h, shots, tMs, { titles });
         if (manualFrames) track.requestFrame();
 
         if (f % 5 === 0 && onProgress) onProgress({ phase: "render", current: f + 1, total: totalFrames });
@@ -864,6 +1033,9 @@ function Rundvis() {
   // Music. The agent supplies the track: bundling one would mean shipping music we have no
   // licence to redistribute, and a listing video is published publicly. An uploaded file is
   // decoded once and reused for both the preview and the exported file.
+  // Address and agent for the opening and closing cards. Empty means no cards at all: the film
+  // is complete without them, and a half-filled title is worse than none.
+  const [titles, setTitles] = useState({ headline: "", agent: "" });
   const [musicName, setMusicName] = useState("");
   const [musicError, setMusicError] = useState("");
   const [musicOnPreview, setMusicOnPreview] = useState(true);
@@ -1450,6 +1622,7 @@ function Rundvis() {
         specs: flythroughParams,
         clips: hqClips,
         musicBytes: musicRawRef.current,
+        titles,
         format,
         fps: 30,
         onProgress: setExportProgress,
@@ -1697,6 +1870,7 @@ function Rundvis() {
                     specs={flythroughParams}
                     clips={hqClips}
                     onError={(m) => { setFlythroughError(m); setFlythroughStatus("error"); }}
+                    titles={titles}
                   />
                 </div>
               )}
@@ -1936,6 +2110,31 @@ function Rundvis() {
                       er genereret og indgår nu i både afspilleren og den video du henter.
                     </p>
                   )}
+                </div>
+              )}
+
+              {flythroughStatus === "done" && flythroughStills.length > 0 && (
+                <div className="mb-5 p-4 rounded-xl" style={{ backgroundColor: SURFACE_2, border: `1px solid ${LINE}` }}>
+                  <p className="text-sm mb-1" style={{ color: TEXT }}>Tekst på videoen</p>
+                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>
+                    Adressen vises i starten, navnet til sidst. Lad felterne stå tomme for en video helt uden tekst.
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      value={titles.headline}
+                      onChange={(e) => setTitles((t) => ({ ...t, headline: e.target.value.slice(0, 48) }))}
+                      placeholder="Strandvejen 12, 2900 Hellerup"
+                      className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
+                      style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}`, color: TEXT }}
+                    />
+                    <input
+                      value={titles.agent}
+                      onChange={(e) => setTitles((t) => ({ ...t, agent: e.target.value.slice(0, 40) }))}
+                      placeholder="Mægler eller firma"
+                      className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
+                      style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}`, color: TEXT }}
+                    />
+                  </div>
                 </div>
               )}
 
