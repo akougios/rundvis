@@ -92,19 +92,25 @@ export const MODELS = {
   "seedance-1-pro": {
     label: "Seedance 1.0 Pro",
     provider: "fal",
-    endpoint: "fal-ai/bytedance/seedance/v1/pro/image-to-video",
-    // The only one of the three with a SEED, which matters for this product: the app promises
-    // that the same photos give the same video. It also takes an exact duration, so we can buy
-    // the 3 seconds the edit actually uses instead of a 5-second minimum.
-    note: "Har seed (samme input giver samme klip) og frit valg af længde, så vi kun betaler for de sekunder klipningen bruger.",
+    // Picked as the default after a side-by-side on the user's own listing photos: Seedance and
+    // Luma Ray 3.2 both held the room still, while Kling and Luma Ray 2 did not. Between the two
+    // that passed, Seedance wins on everything that is not the picture:
+    //   - it is the only one with a SEED, so the same photos really do give the same video,
+    //     which is what the app promises;
+    //   - it takes an exact duration, so we buy the ~3s the edit uses instead of a 5s minimum;
+    //   - at full resolution it costs roughly 0.37 against Luma's 0.95 - about 2.5x cheaper on
+    //     every video sold, forever.
+    note: "Holdt billedet bedst i testen, og den eneste med seed (samme input giver samme klip). Frit valg af længde, så vi kun betaler for de sekunder klipningen bruger.",
     seconds: 3,
+    priceByQuality: { test: 0.18, final: 0.372 },
+    resolutionByQuality: { test: "720p", final: "1080p" },
     usdPerSecond: 0.124,
     deterministic: true,
-    build: ({ imageUrl, prompt, aspectRatio, seed }) => ({
+    build: ({ imageUrl, prompt, aspectRatio, seed, quality }) => ({
       prompt,
       image_url: imageUrl,
       duration: 3,
-      resolution: "1080p",
+      resolution: quality === "final" ? "1080p" : "720p",
       aspect_ratio: aspectRatio || "auto",
       camera_fixed: false,
       seed,
@@ -135,7 +141,9 @@ export const MODELS = {
 
 // Defaults to the one that needs no new account, so the app works out of the box with the key
 // this project already had.
-export const DEFAULT_MODEL = process.env.FAL_MODEL_KEY || "luma-direct";
+// Seedance by default: it matched the best picture in a side-by-side on real listing photos,
+// and it is the cheapest of the two that passed - with a seed on top.
+export const DEFAULT_MODEL = process.env.FAL_MODEL_KEY || "seedance-1-pro";
 
 export function resolveModel(key) {
   const k = key && MODELS[key] ? key : DEFAULT_MODEL;

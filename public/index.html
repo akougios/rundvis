@@ -1035,7 +1035,15 @@ function Rundvis() {
   // and - critically - no risk of the camera "inventing" a wrong direction: the same photos
   // always produce the exact same depth maps and therefore the exact same moves. (The old
   // Luma-based AI clip code is still in api/generate-flythrough/ but is no longer wired in here.)
-  const MAX_FLYTHROUGH_IMAGES = 8;
+  // 20, not 8. A real listing video runs 40-50 seconds, and at this edit's pace that is 16-20
+  // shots - the reference film the agent supplied had 14 clips across 40.7s. Eight photos made
+  // a 20-second video, which is short for a property.
+  const MAX_FLYTHROUGH_IMAGES = 20;
+  // How many clips are generated at once. Sequentially, 18 clips at ~2 minutes each is over half
+  // an hour of staring at a progress bar; three at a time brings that to about twelve minutes.
+  // Kept low on purpose: the providers rate-limit, and a burst of twenty parallel jobs is the
+  // kind of thing that gets an account throttled.
+  const HQ_CONCURRENCY = 3;
   // Photos are kept at up to this size. A 1920-wide export at the tightest 10% crop samples at
   // most ~2130 source pixels across, so 2560 leaves headroom while keeping several photos in
   // memory comfortably. Anything smaller is left exactly as uploaded and never re-encoded.
@@ -1195,12 +1203,12 @@ function Rundvis() {
     const clips = onlyIndexes && hqClips ? hqClips.slice() : new Array(flythroughStills.length).fill(null);
     if (!onlyIndexes) setHqClips(null);
     try {
-      for (let n = 0; n < indexes.length; n++) {
-        const i = indexes[n];
-        setHqProgress({ current: n + 1, total: indexes.length, phase: "upload" });
+      let done = 0;
+      setHqProgress({ current: 0, total: indexes.length, phase: "generate" });
 
-        // The video service needs a publicly reachable image, so the photo goes to Blob storage
-        // first (same endpoint the old Luma flow used).
+      // One photo, start to finish. Each runs independently, so a slow clip does not hold up
+      // the others.
+      const lavKlip = async (i) => {
         const up = await fetch("/api/upload-image", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1209,7 +1217,6 @@ function Rundvis() {
         const upJson = await up.json();
         if (!up.ok) throw new Error(upJson.error || "Kunne ikke uploade billedet.");
 
-        setHqProgress({ current: n + 1, total: indexes.length, phase: "generate" });
         const create = await fetch("/api/generate-clip/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1229,9 +1236,6 @@ function Rundvis() {
         const created = await create.json();
         if (!create.ok) throw new Error(created.error || "Kunne ikke starte videoklippet.");
 
-        // Poll until the clip is done. Generation typically takes a couple of minutes per clip,
-        // so this gives up only after a genuinely long wait rather than a flaky one.
-        let clipUrl = null;
         for (let attempt = 0; attempt < 150; attempt++) {
           await new Promise((r) => setTimeout(r, 4000));
           const st = await fetch("/api/generate-clip/status", {
@@ -1244,15 +1248,40 @@ function Rundvis() {
           });
           const stJson = await st.json();
           if (!st.ok) throw new Error(stJson.error || "Kunne ikke hente status.");
-          if (stJson.done) { clipUrl = { url: stJson.videoUrl, sig: stJson.sig }; break; }
+          if (stJson.done) return { url: stJson.videoUrl, sig: stJson.sig };
         }
-        if (!clipUrl) throw new Error(`Klip ${i + 1} blev ikke færdigt i tide. Prøv igen.`);
-        clips[i] = clipUrl;
-        // Published as we go, so the agent sees the walkthrough improve clip by clip instead of
-        // staring at a spinner for ten minutes.
-        setHqClips(clips.slice());
+        throw new Error(`Klip ${i + 1} blev ikke færdigt i tide.`);
+      };
+
+      // A small worker pool: HQ_CONCURRENCY jobs in flight, each taking the next photo off the
+      // queue as it finishes.
+      const koe = indexes.slice();
+      const fejl = [];
+      const arbejder = async () => {
+        while (koe.length) {
+          const i = koe.shift();
+          try {
+            clips[i] = await lavKlip(i);
+            // Published as we go, so the walkthrough visibly improves clip by clip rather than
+            // leaving the agent watching a spinner.
+            setHqClips(clips.slice());
+          } catch (err) {
+            // One photo failing is worth reporting, but it must not throw away the clips that
+            // succeeded - those are already paid for.
+            fejl.push(`Billede ${i + 1}: ${err.message}`);
+          }
+          done++;
+          setHqProgress({ current: done, total: indexes.length, phase: "generate" });
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(HQ_CONCURRENCY, koe.length) }, arbejder));
+
+      if (fejl.length) {
+        setHqError(`${fejl.length} af ${indexes.length} klip fejlede. ${fejl[0]}${fejl.length > 1 ? " (og flere)" : ""} Resten er gemt.`);
+        setHqStatus(clips.some(Boolean) ? "done" : "error");
+      } else {
+        setHqStatus("done");
       }
-      setHqStatus("done");
     } catch (err) {
       setHqError(err.message || "Genereringen fejlede.");
       setHqStatus("error");
@@ -1810,9 +1839,9 @@ function Rundvis() {
                         Start med ét billede — så ser du hvordan modellen klarer dine fotos, før du bruger noget på
                         hele boligen.{" "}
                         {priced
-                          ? `Ét klip ca. ${prisPrKlip(m).toFixed(2)} $, alle ${flythroughStills.length} ca. ${(prisPrKlip(m) * flythroughStills.length).toFixed(2)} $.`
+                          ? `Ét klip ca. ${prisPrKlip(m).toFixed(2)} $ — alle ${flythroughStills.length} koster ca. ${(prisPrKlip(m) * flythroughStills.length).toFixed(2)} $.`
                           : "Prisen på denne model kendes ikke her — se forbruget hos udbyderen."}{" "}
-                        Regn med et par minutter pr. klip.
+                        {`Der køres ${HQ_CONCURRENCY} klip ad gangen, så ${flythroughStills.length} billeder tager omkring ${Math.max(2, Math.ceil((flythroughStills.length / HQ_CONCURRENCY) * 2))} minutter.`}
                       </p>
                     );
                   })()}
