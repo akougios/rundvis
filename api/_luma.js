@@ -9,13 +9,19 @@ export const LUMA_BASE = "https://agents.lumalabs.ai/v1/generations";
 
 // Luma's structured camera moves. These are far more literal than describing motion in prose,
 // and they are what Luma is strongest at.
+//
+// Direction is carried through rather than dropped. Every clip used to go out as pan_left or
+// push_in, so a property upgraded to real camera motion came back LESS varied than the free 2D
+// version it replaced - eighteen rooms all drifting the same way. The edit already alternates
+// direction shot by shot; this is what lets the generated clips honour it.
 const CONCEPTS = {
-  push: "push_in",
-  pull: "pull_out",
-  pullback: "pull_out",
-  pan: "pan_left",
-  drift: "crane_up",
-  orbit: "orbit_left",
+  push: () => "push_in",
+  lean: () => "push_in",
+  pull: () => "pull_out",
+  pullback: () => "pull_out",
+  pan: (dir) => (dir < 0 ? "pan_right" : "pan_left"),
+  drift: () => "crane_up",
+  orbit: (dir) => (dir < 0 ? "orbit_right" : "orbit_left"),
 };
 
 // Two quality steps. Test exists so a room can be checked for a fraction of the price: if the
@@ -36,21 +42,32 @@ const BASE_PROMPT =
   "they are in the photo: nothing moves, nothing changes shape, nothing is added or removed. " +
   "No people, no animals, no text. Only the camera moves.";
 
+// The prompt says the move in words as well, and carries the direction. It is not redundant with
+// the concept: if a concept key is ever rejected the request is retried on the prompt alone, and
+// the move still comes out roughly right rather than becoming a random drift.
+const side = (dir) => (dir < 0 ? "right" : "left");
 const MOTION = {
-  push: "The camera moves slowly and steadily forward into the room.",
-  pull: "The camera moves slowly and steadily backwards, revealing more of the room.",
-  pullback: "The camera moves slowly and steadily backwards, revealing more of the room.",
-  pan: "The camera tracks slowly and steadily sideways across the room, staying level.",
-  drift: "The camera drifts slowly and steadily across the room in a smooth diagonal.",
-  orbit: "The camera arcs slowly and steadily sideways around the room, staying level.",
+  push: () => "The camera moves slowly and steadily forward into the room.",
+  lean: (dir) =>
+    `The camera eases forward into the room and leans slightly to the ${side(dir)} as it goes.`,
+  pull: () => "The camera moves slowly and steadily backwards, revealing more of the room.",
+  pullback: () => "The camera moves slowly and steadily backwards, revealing more of the room.",
+  pan: (dir) =>
+    `The camera tracks slowly and steadily sideways to the ${side(dir)} across the room, staying level.`,
+  drift: () => "The camera rises slowly and steadily, craning up over the room.",
+  orbit: (dir) =>
+    `The camera arcs slowly and steadily around the room to the ${side(dir)}, staying level, ` +
+    "as if walking around the space.",
 };
 
-export function buildRequest({ imageUrl, motion, aspectRatio, quality }) {
+export function buildRequest({ imageUrl, motion, aspectRatio, quality, dir, withConcepts = true }) {
   const q = QUALITIES[quality] || QUALITIES.test;
-  return {
+  const d = dir === -1 ? -1 : 1;
+  const words = (MOTION[motion] || MOTION.push)(d);
+  const body = {
     model: "ray-3.2",
     type: "video",
-    prompt: `${BASE_PROMPT} ${MOTION[motion] || MOTION.push}`,
+    prompt: `${BASE_PROMPT} ${words}`,
     aspect_ratio: aspectRatio && aspectRatio !== "auto" ? aspectRatio : "16:9",
     video: {
       resolution: q.resolution,
@@ -60,8 +77,9 @@ export function buildRequest({ imageUrl, motion, aspectRatio, quality }) {
       keyframes: [{ url: imageUrl }],
       keyframe_indexes: [0],
     },
-    concepts: [{ key: CONCEPTS[motion] || "push_in" }],
   };
+  if (withConcepts) body.concepts = [{ key: (CONCEPTS[motion] || CONCEPTS.push)(d) }];
+  return body;
 }
 
 export function lumaKeyOrRespond(res) {

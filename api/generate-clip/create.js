@@ -11,14 +11,25 @@ export default async function handler(req, res) {
   const key = lumaKeyOrRespond(res);
   if (!key) return;
 
-  const { imageUrl, motion, aspectRatio, quality } = req.body || {};
+  const { imageUrl, motion, aspectRatio, quality, dir } = req.body || {};
   if (!imageUrl || typeof imageUrl !== "string" || !/^https:\/\//.test(imageUrl)) {
     res.status(400).json({ error: "Mangler et gyldigt billede-URL (https)." });
     return;
   }
 
   try {
-    const body = JSON.stringify(buildRequest({ imageUrl, motion, aspectRatio, quality }));
+    // The camera move is sent twice over: as a structured concept, which Luma follows most
+    // literally, and in the prompt. If the concept key is rejected the request goes again on the
+    // prompt alone - the move still comes out roughly right, and a clip that is slightly off
+    // beats a clip that does not exist. Directional keys like pan_right cannot be verified
+    // against Luma's vocabulary from here, so this is what keeps a wrong guess from costing the
+    // agent their whole property.
+    const withConcepts = JSON.stringify(buildRequest({ imageUrl, motion, aspectRatio, quality, dir }));
+    const withoutConcepts = JSON.stringify(
+      buildRequest({ imageUrl, motion, aspectRatio, quality, dir, withConcepts: false })
+    );
+    let body = withConcepts;
+    let droppedConcepts = false;
 
     // Several clips are submitted at once so a whole property finishes in minutes rather than
     // half an hour, and a burst is exactly what gets rate-limited. A 429 is therefore an expected
@@ -37,6 +48,13 @@ export default async function handler(req, res) {
         body,
       });
       text = await r.text();
+      // 422 is Luma refusing a field. The concept key is the only guessed field in the request,
+      // so drop it and try once more before calling this a failure.
+      if (r.status === 422 && !droppedConcepts) {
+        droppedConcepts = true;
+        body = withoutConcepts;
+        continue;
+      }
       if (r.status !== 429 || attempt >= 1) break;
       const after = Number(r.headers.get("retry-after"));
       const wait = Number.isFinite(after) && after > 0 ? after * 1000 : 1500;

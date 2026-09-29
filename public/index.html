@@ -285,10 +285,14 @@ function buildEditPlan(count) {
       zFrom = 1.08; zTo = 1.0;
       fromU = { x: -0.2 * d, y: 0.45 }; toU = { x: 0, y: -0.1 };
     } else {
-      // FIVE types on an odd-length cycle. Odd matters: direction alternates with i, so an
+      // SEVEN types on an odd-length cycle. Odd matters: direction alternates with i, so an
       // even-length cycle would land every pan on the same parity and give them all the same
-      // direction. Five also means the pattern does not visibly repeat inside one property.
-      const cycle = ["pan", "drift", "push", "pan", "pullback"];
+      // direction. Seven also means the pattern does not visibly repeat inside one property.
+      //
+      // "orbit" is here although 2D cannot really orbit - it renders as an arcing travel, and
+      // becomes a true arc around the room once that shot is upgraded. That is the honest place
+      // to put a move the free version can only suggest: it is what the upgrade visibly buys.
+      const cycle = ["pan", "push", "orbit", "drift", "lean", "pan", "pullback"];
       type = cycle[(i - 1) % cycle.length];
       nBeats = i % 2 ? 4 : 5; // 2.1s / 2.6s alternating, so the rhythm never goes metronomic
 
@@ -303,11 +307,24 @@ function buildEditPlan(count) {
         // move runs along whichever axis the photo actually has room in - wide for a 9:16 frame,
         // tall for a 16:9 one - with no special-casing. A touch of zoom keeps it from feeling
         // locked off.
+        // Capped at the full slack. Uncapped, a high v put the endpoints past what the photo has
+        // room for, and the clamp then held the frame still at each end - the parking that the
+        // eases were shaped to get rid of in the first place.
+        const ampX = Math.min(T * v, 1);
         zFrom = 1.05; zTo = 1.05 + 0.025 * vz;
-        fromU = { x: -T * d * v, y: T * 0.25 * d * v }; toU = { x: T * d * v, y: -T * 0.25 * d * v };
+        fromU = { x: -ampX * d, y: T * 0.25 * d * v }; toU = { x: ampX * d, y: -T * 0.25 * d * v };
       } else if (type === "drift") {
         zFrom = 1.02; zTo = 1.02 + 0.07 * vz;
         fromU = { x: -T * 0.55 * d * v, y: -T * 0.5 * d * v }; toU = { x: T * 0.55 * d * v, y: T * 0.5 * d * v };
+      } else if (type === "orbit") {
+        // Sideways travel with the vertical running the other way and a slow push: the frame
+        // swings rather than slides, which is as close to an arc as a flat photo goes.
+        zFrom = 1.03; zTo = 1.03 + 0.05 * vz;
+        fromU = { x: -T * 0.7 * d * v, y: T * 0.35 * v }; toU = { x: T * 0.7 * d * v, y: -T * 0.35 * v };
+      } else if (type === "lean") {
+        // Push in with the frame easing to one side - a step into the room rather than a zoom.
+        zFrom = 1.0; zTo = 1.0 + 0.1 * vz;
+        fromU = { x: -T * 0.2 * d * v, y: T * 0.1 * v }; toU = { x: T * 0.35 * d * v, y: -T * 0.2 * v };
       } else if (type === "pullback") {
         // Opens tight and opens up. Mixed into the body of the edit, not saved for the ending,
         // so the video is not a run of push-ins with one pull-out at the very end.
@@ -1324,6 +1341,10 @@ function Rundvis() {
         const payload = JSON.stringify({
           imageUrl: upJson.url,
           motion: flythroughParams[i] ? flythroughParams[i].type : "push",
+          // The edit alternates direction shot by shot. Without this the model was told only
+          // "pan" and defaulted left every time, so an upgraded property came back with less
+          // variation than the free version it replaced.
+          dir: flythroughParams[i] ? flythroughParams[i].dirSign : 1,
           // Generate natively in the shape the video will be shown in, rather than cropping a
           // widescreen clip down afterwards - on the models that support it.
           aspectRatio: previewFormat,
