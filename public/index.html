@@ -1312,11 +1312,16 @@ function Rundvis() {
 
   // Same reasoning for removing a shot: drop the photo and its clip together.
   const removeShot = (idx) => {
-    if (flythroughStills.length <= 2) return; // a walkthrough needs at least two shots
+    if (flythroughStills.length <= 3) return; // three is the minimum a walkthrough is built from
     const drop = (arr) => arr.filter((_, i) => i !== idx);
     setFlythroughStills(drop);
     setHqClips((prev) => (prev ? drop(prev) : prev));
+    // hqMotion is per clip and indexed alongside it. Left in place it stayed one step out of
+    // alignment after a removal, so every later room was cut to a different room's measurement.
+    setHqMotion((prev) => (prev ? drop(prev) : prev));
     setImages((prev) => (idx < prev.length ? drop(prev) : prev));
+    // The selection is an index, so it has to be pulled back inside the new length.
+    setCompareIndex((prev) => Math.max(0, Math.min(prev, flythroughStills.length - 2)));
     setExportFile((prev) => { if (prev) URL.revokeObjectURL(prev.url); return null; });
     setExportStatus("idle");
   };
@@ -1502,7 +1507,7 @@ function Rundvis() {
   const allVoicesReady = voices.length === scenes.length && voices.every((v) => v && v.status === "ready");
 
   // ---- Walkthrough: deterministic 2D camera motion - see the motion helpers
-  // helpers near the top of this file. Every uploaded photo (up to MAX_FLYTHROUGH_IMAGES) gets a
+  // helpers near the top of this file. Every uploaded photo gets a
   // real per-pixel depth map estimated entirely client-side, then a virtual camera moves through
   // the resulting 3D mesh along a fixed path. No AI video generation, no upload, no per-run cost,
   // and - critically - no risk of the camera "inventing" a wrong direction: the same photos
@@ -1511,7 +1516,7 @@ function Rundvis() {
   // 20, not 8. A real listing video runs 40-50 seconds, and at this edit's pace that is 16-20
   // shots - the reference film the agent supplied had 14 clips across 40.7s. Eight photos made
   // a 20-second video, which is short for a property.
-  const MAX_FLYTHROUGH_IMAGES = 20;
+
   // How many clips are generated at once. One clip takes the model about three minutes whatever
   // we do, so wall-clock time is purely a question of how many run in parallel: at three, 18
   // photos is ~18 minutes, at six it is ~9. Six is not reckless because create.js treats a 429
@@ -1559,7 +1564,12 @@ function Rundvis() {
     setHqStatus("idle");
     setHqError("");
     try {
-      const used = images.slice(0, MAX_FLYTHROUGH_IMAGES);
+      // No cap. There used to be one at 20, which silently DROPPED every photo past it - a
+      // property with 28 rooms quietly became a film of the first 20, with nothing on screen to
+      // say so. The real constraint is memory at export time, where every photo is held as a
+      // prescaled plate at output size; that is worth fixing properly if it ever bites, not
+      // worth hiding behind a number that throws work away without telling anyone.
+      const used = images;
       setFlythroughProgress({ current: 0, total: used.length });
       const stills = [];
       for (let i = 0; i < used.length; i++) {
@@ -2058,15 +2068,12 @@ function Rundvis() {
             <div className={scenes.length > 0 ? "pt-6 mt-2 border-t" : ""} style={{ borderColor: LINE }}>
               {scenes.length === 0 && <h1 className="font-display text-2xl mb-1">Din video</h1>}
               {scenes.length > 0 && <h2 className="font-display text-lg mb-1">Filmisk gennemgang</h2>}
-              <p className="text-xs mb-1" style={{ color: MUTED }}>
-                Klar til at hente. Vil du have kameraet til at bevæge sig gennem rummene, kan du opgradere nedenfor.
-              </p>
-              <p className="text-xs mb-1" style={{ color: MUTED }}>
-
-              </p>
+              {flythroughStatus === "done" && (
+                <p className="text-xs mb-3" style={{ color: MUTED }}>Klar til at hente.</p>
+              )}
               {images.length >= 1 && flythroughStatus === "idle" && (
                 <p className="text-xs mb-4" style={{ color: MUTED }}>
-                  Beregner en 3D-kamerabevægelse for hvert af de {Math.min(images.length, MAX_FLYTHROUGH_IMAGES)} billeder du har uploadet indtil videre — tager typisk nogle få sekunder pr. billede, direkte i browseren.
+                  Beregner en kamerabevægelse for hvert af de {images.length} billeder du har uploadet indtil videre.
                 </p>
               )}
 
@@ -2083,28 +2090,6 @@ function Rundvis() {
               )}
 
               {flythroughStatus === "error" && <p className="text-xs" style={{ color: AMBER }}>{flythroughError}</p>}
-
-              {flythroughStatus === "done" && flythroughStills.length > 0 && (
-                <div className="mb-3 flex flex-wrap items-center gap-2">
-                  {Object.keys(EXPORT_FORMATS).map((f) => {
-                    const on = previewFormat === f;
-                    return (
-                      <button
-                        key={f}
-                        onClick={() => setPreviewFormat(f)}
-                        className="px-3 py-1.5 rounded-full text-xs whitespace-nowrap transition-colors"
-                        style={{
-                          border: `1px solid ${on ? ACCENT : LINE}`,
-                          backgroundColor: on ? ACCENT : "transparent",
-                          color: on ? "#fff" : MUTED,
-                        }}
-                      >
-                        {EXPORT_FORMATS[f].label} <span style={{ opacity: 0.75 }}>{f}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div
@@ -2128,71 +2113,106 @@ function Rundvis() {
               )}
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  {Object.keys(EXPORT_FORMATS).map((f) => {
+                    const on = previewFormat === f;
+                    return (
+                      <button
+                        key={f}
+                        onClick={() => setPreviewFormat(f)}
+                        className="px-3 py-1.5 rounded-full text-xs whitespace-nowrap transition-colors"
+                        style={{
+                          border: `1px solid ${on ? ACCENT : LINE}`,
+                          backgroundColor: on ? ACCENT : "transparent",
+                          color: on ? "#fff" : MUTED,
+                        }}
+                      >
+                        {EXPORT_FORMATS[f].label} <span style={{ opacity: 0.75 }}>{f}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="mb-5">
                   <p className="text-[11px] mb-2" style={{ color: MUTED }}>
-                    Rækkefølge — videoen opdaterer sig med det samme
+                    Rækkefølge — tryk på et rum for at vælge det
                   </p>
                   <div className="flex gap-2 overflow-x-auto pb-1">
-                    {flythroughStills.map((src, i) => (
-                      <div key={i} className="shrink-0 relative group" style={{ width: 92 }}>
-                        <div className="rounded-md overflow-hidden" style={{ height: 62, border: `1px solid ${LINE}` }}>
-                          <img src={src} alt="" className="w-full h-full object-cover" />
+                    {flythroughStills.map((src, i) => {
+                      const on = compareIndex === i;
+                      return (
+                        <div key={i} className="shrink-0" style={{ width: 92 }}>
+                          <button
+                            onClick={() => setCompareIndex(i)}
+                            className="relative block w-full rounded-md overflow-hidden"
+                            style={{ height: 62, border: `2px solid ${on ? ACCENT : LINE}` }}
+                          >
+                            <img src={src} alt="" className="w-full h-full object-cover" />
+                            <span
+                              className="absolute top-1 left-1 px-1 rounded text-[9px]"
+                              style={{ backgroundColor: "rgba(0,0,0,0.55)", color: "#fff" }}
+                            >
+                              {i + 1}
+                            </span>
+                            {hqClips && hqClips[i] && (
+                              <span
+                                className="absolute top-1 right-1 rounded-full px-1.5 text-[9px]"
+                                style={{ backgroundColor: ACCENT, color: "#fff" }}
+                                title="Opgraderet klip"
+                              >
+                                HD
+                              </span>
+                            )}
+                          </button>
+                          {/* Only the selected room carries its controls. Shown on every thumbnail,
+                              these came to four buttons per photo - well over a hundred on a large
+                              property, for something an agent touches once. */}
+                          {on && (
+                            <div className="flex items-center justify-between mt-1">
+                              <button
+                                onClick={() => moveShot(i, -1)}
+                                disabled={i === 0}
+                                className="px-1 py-0.5 text-[11px]"
+                                style={{ color: i === 0 ? LINE : MUTED, cursor: i === 0 ? "default" : "pointer" }}
+                                aria-label="Flyt tidligere"
+                              >
+                                ←
+                              </button>
+                              {flythroughStills.length > 3 && (
+                                <button
+                                  onClick={() => removeShot(i)}
+                                  className="text-[10px]"
+                                  style={{ color: MUTED }}
+                                >
+                                  Fjern
+                                </button>
+                              )}
+                              <button
+                                onClick={() => moveShot(i, 1)}
+                                disabled={i === flythroughStills.length - 1}
+                                className="px-1 py-0.5 text-[11px]"
+                                style={{
+                                  color: i === flythroughStills.length - 1 ? LINE : MUTED,
+                                  cursor: i === flythroughStills.length - 1 ? "default" : "pointer",
+                                }}
+                                aria-label="Flyt senere"
+                              >
+                                →
+                              </button>
+                            </div>
+                          )}
                         </div>
-                        {hqClips && hqClips[i] && (
-                          <span
-                            className="absolute top-1 right-1 rounded-full px-1.5 text-[9px]"
-                            style={{ backgroundColor: ACCENT, color: "#fff" }}
-                            title="Opgraderet klip"
-                          >
-                            HD
-                          </span>
-                        )}
-                        <div className="flex items-center justify-between mt-1">
-                          <button
-                            onClick={() => moveShot(i, -1)}
-                            disabled={i === 0}
-                            className="px-1.5 py-0.5 rounded text-[11px]"
-                            style={{ color: i === 0 ? LINE : MUTED, cursor: i === 0 ? "default" : "pointer" }}
-                            aria-label="Flyt tidligere"
-                          >
-                            ←
-                          </button>
-                          <span className="text-[10px]" style={{ color: MUTED }}>{i + 1}</span>
-                          <button
-                            onClick={() => moveShot(i, 1)}
-                            disabled={i === flythroughStills.length - 1}
-                            className="px-1.5 py-0.5 rounded text-[11px]"
-                            style={{
-                              color: i === flythroughStills.length - 1 ? LINE : MUTED,
-                              cursor: i === flythroughStills.length - 1 ? "default" : "pointer",
-                            }}
-                            aria-label="Flyt senere"
-                          >
-                            →
-                          </button>
-                        </div>
-                        {flythroughStills.length > 2 && (
-                          <button
-                            onClick={() => removeShot(i)}
-                            className="w-full text-[10px] mt-0.5"
-                            style={{ color: MUTED }}
-                          >
-                            Fjern
-                          </button>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="mb-5 p-4 rounded-xl" style={{ backgroundColor: SURFACE_2, border: `1px solid ${LINE}` }}>
-                  <p className="text-sm mb-1" style={{ color: TEXT }}>Opgradér: ægte kamerabevægelse</p>
-                  <p className="text-[11px] mb-4" style={{ color: MUTED }}>
-                    Hvert billede bliver til et klip hvor kameraet faktisk bevæger sig i rummet.
-                    Samme klipning og formater som nu.
-                  </p>
+                  <p className="text-sm mb-3" style={{ color: TEXT }}>Opgradér: ægte kamerabevægelse</p>
 
                   {hqStatus !== "working" && (
                     <div className="space-y-4">
@@ -2205,28 +2225,14 @@ function Rundvis() {
                           {hqClips ? "✓" : "1"}
                         </span>
                         <div className="flex-1">
-                          <p className="text-xs mb-1" style={{ color: TEXT }}>Prøv det på ét rum</p>
-                          <p className="text-[11px] mb-2" style={{ color: MUTED }}>
-                            Se resultatet på dine egne billeder for ~{QUALITIES[hqQuality].usd.toFixed(2)} $, før du bruger mere.
+                          <p className="text-xs mb-1" style={{ color: TEXT }}>
+                            Prøv det på ét rum — ~{QUALITIES[hqQuality].usd.toFixed(2)} $
                           </p>
-                          {flythroughStills.length > 1 && (
-                            <div className="flex gap-2 overflow-x-auto pb-1 mb-2">
-                              {flythroughStills.map((src, i) => (
-                                <button
-                                  key={i}
-                                  onClick={() => setCompareIndex(i)}
-                                  className="shrink-0 rounded-md overflow-hidden"
-                                  style={{
-                                    width: 56, height: 38,
-                                    border: `2px solid ${compareIndex === i ? ACCENT : "transparent"}`,
-                                    opacity: compareIndex === i ? 1 : 0.5,
-                                  }}
-                                >
-                                  <img src={src} alt="" className="w-full h-full object-cover" />
-                                </button>
-                              ))}
-                            </div>
-                          )}
+                          {/* No second copy of the thumbnails here. The strip above is the one
+                              selector on the page; this only names what it currently points at. */}
+                          <p className="text-[11px] mb-2" style={{ color: TEXT }}>
+                            Valgt: rum {compareIndex + 1} af {flythroughStills.length}
+                          </p>
                           {hqClips && hqClips[compareIndex] ? (
                             <p className="text-[11px]" style={{ color: TEXT }}>
                               <Icon name="check" size={11} /> Dette rum er klar — se det i afspilleren, eller vælg et andet.
