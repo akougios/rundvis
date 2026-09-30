@@ -1058,7 +1058,10 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
     // walkthrough still exports as a complete video.
     for (let i = 0; i < stills.length; i++) {
       let shot = null;
-      if (clips && clips[i]) {
+      // The same test the player uses. Without it the downloaded file kept the clips the player
+      // had dropped for barely moving, so the export showed frozen rooms that were not on screen
+      // - the one divergence between preview and file that composeShowFrame exists to prevent.
+      if (clips && clips[i] && !(specs[i] && specs[i].useClip === false)) {
         try { shot = { video: await loadClipVideo(clips[i]), spec: specs[i] }; } catch (e) { shot = null; }
       }
       if (!shot) {
