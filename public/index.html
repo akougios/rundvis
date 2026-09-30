@@ -1744,7 +1744,7 @@ function Rundvis() {
   // clips at the two ends, because the tempo arc makes the end shots the longest - it left the
   // middle third of a 42-second film with no generated motion at all. Segmenting spreads them
   // across the running time and still picks the shot in each stretch that is on screen longest.
-  const HQ_HIGHLIGHTS = 6;
+  const HQ_HIGHLIGHTS = 12;
   const hqHighlightIndexes = useMemo(() => {
     const total = basePlan.length;
     if (total === 0) return [];
