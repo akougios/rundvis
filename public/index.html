@@ -98,8 +98,22 @@ function applyKenBurns(el, params, t) {
 // The trade is parallax. In exchange: nothing to go wrong, no model to download, no waiting, and
 // a far smaller crop (about 4-10% here against the 22% the 3D camera needed for room to turn).
 
-const KB_MAX_ZOOM = 1.1;   // tightest any shot ever frames: a 10% crop, and only at one end of a move
-const KB_TRAVEL = 0.9;     // fraction of the available slack a full move uses
+// Tightest any shot ever frames: a 10% crop, and only at one end of a move. Briefly raised to
+// 1.14 to chase the reference, then put back: the reference's MEDIAN shot zooms 1.040 in total,
+// less than ours already does. Its average of 6.4% per second is two 0.7-second punch-ins at 36%
+// dragging the number up, not a house style. We were never zooming too little.
+const KB_MAX_ZOOM = 1.1;
+// Fraction of the available slack a full move uses.
+//
+// Was 0.9. For the common case - a 3:2 photo in a 16:9 frame - all the slack is vertical and
+// worth about 16% of the photo's height, so 0.9 swept the frame through 14% of the picture on
+// every shot. In the reference the median shot drifts by under 1% of the frame and the widest by
+// about 9%: the move is a push with a drift on it, not a tour of the photograph. At 0.32 a full
+// move covers around 5%, still more than the reference uses.
+//
+// (An earlier version of this note cited horizontal travel. That number was meaningless here: a
+// 3:2 photo in a 16:9 frame has NO horizontal slack, so what was being measured was the zoom.)
+const KB_TRAVEL = 0.32;
 
 function clamp01(t) { return Math.max(0, Math.min(1, t)); }
 function clampU(u) { return Math.max(-1, Math.min(1, u)); }
@@ -252,10 +266,15 @@ function syncShowVideos(shots, idx, localMs, prevIdx) {
 // power curve has zero velocity at one end, so a shot built on one comes to a dead stop either
 // just before its cut or just after it. Blended, the camera is never slower than ~0.35x its
 // average - it always reads as moving, even at the very edges of a clip.
+// The first number IS the speed each shot opens at, as a fraction of its own average: for a*t +
+// b*t^p the shaped term contributes nothing at t=0. They were 0.65, 0.35 and 0.55, so a shot on
+// the ramp curve opened at barely a third of its own pace and read as standing still for a moment
+// before it got going. Measured on the reference, a shot is at 70% of its peak speed within the
+// first 0.3 seconds and only 3 of 18 open below half. Raised to match.
 const SHOT_EASES = {
-  glide: (t) => 0.65 * t + 0.35 * Math.pow(t, 1.8),
-  ramp: (t) => 0.35 * t + 0.65 * Math.pow(t, 2.2),
-  settle: (t) => 0.55 * t + 0.45 * (1 - Math.pow(1 - t, 2)),
+  glide: (t) => 0.80 * t + 0.20 * Math.pow(t, 1.6),
+  ramp: (t) => 0.62 * t + 0.38 * Math.pow(t, 2.0),
+  settle: (t) => 0.72 * t + 0.28 * (1 - Math.pow(1 - t, 2)),
 };
 // t may run PAST 1. A shot stays on screen under the dissolve that replaces it, and clamping
 // there parked it on its last frame for the whole crossfade - the exact standstill the curves
@@ -409,7 +428,13 @@ function buildEditPlan(count, clipMotion) {
       // place to put a move the free version can only suggest: it is what the upgrade buys.
       const family = { push: "in", lean: "in", pull: "out", pullback: "out", pan: "across", orbit: "around", drift: "up" };
       const prev = plan[i - 1] ? plan[i - 1].type : "push";
-      const ALL = ["pan", "push", "orbit", "drift", "lean", "pullback"];
+      // No pullback in the body of the film. Measured against a Reel-E listing video - 18 shots,
+      // 40 seconds - 12 shots push IN, 4 hold their zoom, and only 2 pull out. Ours had pullback
+      // in the general pool on the reasoning that a run of push-ins with one pull-out at the end
+      // reads as a template; what it actually produced was a film that kept backing away from
+      // rooms it had just moved into. Moving in is what a walkthrough does. The closing shot
+      // still pulls out - that is the one place the reference does it too.
+      const ALL = ["pan", "push", "orbit", "drift", "lean"];
       const recent = plan.slice(-3).map((q) => q.type);
       const legal = ALL.filter((m) => m !== prev && family[m] !== family[prev]);
       // Also prefer something not used in the last three shots. Without this the draw clumps -
