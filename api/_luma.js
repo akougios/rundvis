@@ -28,7 +28,10 @@ const CONCEPTS = {
 // model warps something at 720p it will warp it at 1080p too.
 export const QUALITIES = {
   test: { resolution: "720p", usdPerClip: 0.45, label: "Test" },
-  final: { resolution: "1080p", usdPerClip: 0.95, label: "Fuld kvalitet" },
+  // 1.20 is measured, not quoted: 9 clips at full quality billed 10.80 $. The 0.95 that stood
+  // here was an estimate, and it was 26% light. 0.45 for test quality is still only bracketed by
+  // a 6-clip run that came to 2-3 $, so treat it as approximate until a bill confirms it.
+  final: { resolution: "1080p", usdPerClip: 1.20, label: "Fuld kvalitet" },
 };
 
 const CLIP_SECONDS = "5s";

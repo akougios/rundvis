@@ -1272,7 +1272,8 @@ function Rundvis() {
   const [hqMotion, setHqMotion] = useState(null);
   // One model, so no picker. Quality is the only choice left, and it is a real one: Test exists
   // so a room can be checked for half the price before a whole property is committed to.
-  const QUALITIES = { test: { label: "Test", usd: 0.45 }, final: { label: "Fuld kvalitet", usd: 0.95 } };
+  // 1.20 for full quality is measured from a bill (9 clips, 10.80 $), not estimated.
+  const QUALITIES = { test: { label: "Test", usd: 0.45 }, final: { label: "Fuld kvalitet", usd: 1.20 } };
   // Which photo the bake-off and the single-photo test use. Defaults to the SECOND photo, not
   // the first: by the app's own upload guidance photo 1 is the facade, and an exterior is the
   // easiest thing these models have to do - open scene, no doorframes, no furniture to bend.
