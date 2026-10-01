@@ -202,16 +202,72 @@ function shotRectAt(spec, plateW, plateH, outAspect, t) {
 //
 // A generated clip already contains its camera move, so the frame is not moved across it: it is
 // cover-fitted and played. Only stills get the travelling frame.
+// How much of a picture's WIDTH a cover-crop throws away for a given frame.
+//
+// Width, not area, and that distinction is the whole rule. A 3:2 photo in a 16:9 frame keeps its
+// full width and loses some ceiling and floor; in 9:16 it keeps 37% of its width, and with a 1.07
+// zoom on top, 35%. Two thirds of the room cut off at the sides is exactly what an agent means by
+// "it does not show the picture properly", and panning does not rescue it - at any one instant you
+// are still looking at a third of a room.
+//
+// Area loss was tried first and got this wrong in a way that only showed up on screen: a portrait
+// phone photo in a 16:9 frame loses 58% of its AREA, so it tripped the same rule and came out as a
+// narrow strip on a blurred bed, when cropping its ceiling and floor would have been fine. Height
+// is where a room has nothing to say; width is where it does.
+function widthLoss(iw, ih, outAspect) {
+  return 1 - coverRect(iw, ih, outAspect).w / iw;
+}
+// Past this, fit the whole picture instead of cropping it. Landscape photos in 9:16 lose 58-63% of
+// their width and are always over it; everything else - including portrait photos in a landscape
+// frame - stays under and is cropped as before.
+const FIT_WHEN_LOSS_OVER = 0.4;
+
+// The picture, whole, on a bed made from itself: the same frame blown up to fill, blurred far past
+// recognition and dimmed. It reads as depth of field rather than as the bars it really is, and it
+// keeps the colour of the room instead of punching a grey hole in the video.
+function drawBedded(octx, W, H, src, sw, sh, scale, dx, dy) {
+  const prevFilter = octx.filter;
+  const bed = coverRect(sw, sh, W / H);
+  octx.filter = `${prevFilter === "none" ? "" : prevFilter + " "}blur(26px) brightness(0.52) saturate(0.9)`;
+  octx.drawImage(src, (sw - bed.w) / 2, (sh - bed.h) / 2, bed.w, bed.h, -W * 0.06, -H * 0.06, W * 1.12, H * 1.12);
+  octx.filter = prevFilter;
+
+  // The picture itself, fitted whole, with the shot's move applied as a gentle drift inside it
+  // rather than as a crop across it.
+  const fit = Math.min(W / sw, H / sh) * scale;
+  const dw = sw * fit, dh = sh * fit;
+  octx.drawImage(src, 0, 0, sw, sh, (W - dw) / 2 + dx, (H - dh) / 2 + dy, dw, dh);
+}
+
 function drawShot2D(octx, W, H, shot, t) {
   if (shot.video) {
     const v = shot.video;
     const vw = v.videoWidth, vh = v.videoHeight;
     if (!vw || !vh) return;
+    // A clip is generated in the format that was chosen at the time. Switch the player to another
+    // one afterwards and the clip is cover-cropped like any photo, so it gets the same treatment.
+    if (widthLoss(vw, vh, W / H) > FIT_WHEN_LOSS_OVER) {
+      drawBedded(octx, W, H, v, vw, vh, 1, 0, 0);
+      return;
+    }
     const base = coverRect(vw, vh, W / H);
     octx.drawImage(v, (vw - base.w) / 2, (vh - base.h) / 2, base.w, base.h, 0, 0, W, H);
     return;
   }
-  const r = shotRectAt(shot.spec, shot.plate.w, shot.plate.h, W / H, t);
+
+  const pw = shot.plate.w, ph = shot.plate.h;
+  if (widthLoss(pw, ph, W / H) > FIT_WHEN_LOSS_OVER) {
+    const e = easeShot(t, shot.spec.ease);
+    // A small move, because there is no slack to travel through once the picture is whole - and a
+    // big one over a fitted picture only draws attention to the bed behind it.
+    const z = 1 + 0.045 * e;
+    const dx = (shot.spec.toU.x - shot.spec.fromU.x) * e * W * 0.012;
+    const dy = (shot.spec.toU.y - shot.spec.fromU.y) * e * H * 0.012;
+    drawBedded(octx, W, H, shot.plate.canvas, pw, ph, z, dx, dy);
+    return;
+  }
+
+  const r = shotRectAt(shot.spec, pw, ph, W / H, t);
   octx.drawImage(shot.plate.canvas, r.x, r.y, r.w, r.h, 0, 0, W, H);
 }
 
