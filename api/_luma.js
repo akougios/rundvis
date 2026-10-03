@@ -36,31 +36,43 @@ export const QUALITIES = {
 
 const CLIP_SECONDS = "5s";
 
-// Says what the CAMERA does, and states plainly that the room must not change. These models will
-// happily redecorate a room, and for a listing video that is worse than no motion at all: the
-// video has to show the property that is actually for sale.
+// Says what the CAMERA does, and states plainly that nothing in the picture may change. These
+// models will happily redecorate a room, and for a listing video that is worse than no motion at
+// all: the video has to show the property that is actually for sale.
+//
+// "Photograph", not "room". This used to say "this exact room", which is a description that does
+// not fit the facade shot - and the facade shot is the one the camera kept walking into. Told it
+// was looking at a room, with a front door in frame, the model went and found the room.
+//
+// The camera is also told, in as many words, to stay put. Opening a door and travelling through
+// it is the single most damaging thing one of these clips can do: the far side of that door is
+// invented, it is not the property, and an agent cannot publish it.
 const BASE_PROMPT =
-  "Real estate listing video of this exact room. Photorealistic, filmed on a gimbal. " +
-  "The room, the furniture, the light and the view through the windows all stay exactly as " +
-  "they are in the photo: nothing moves, nothing changes shape, nothing is added or removed. " +
-  "No people, no animals, no text. Only the camera moves.";
+  "Real estate listing video of this exact photograph. Photorealistic, filmed on a gimbal. " +
+  "Everything in the picture stays exactly as it is: nothing moves, nothing changes shape, " +
+  "nothing is added or removed, and every door, gate and window stays exactly as it appears - " +
+  "closed doors stay closed. No people, no animals, no text. " +
+  "Only the camera moves, and it stays where it is: it never travels through a doorway, a gate, " +
+  "a window or a wall, and it never enters a space that is not already visible in the photograph.";
 
 // The prompt says the move in words as well, and carries the direction. It is not redundant with
 // the concept: if a concept key is ever rejected the request is retried on the prompt alone, and
 // the move still comes out roughly right rather than becoming a random drift.
 const side = (dir) => (dir < 0 ? "right" : "left");
+// None of these say "into the room" any more. That phrasing was an instruction to go inside, and
+// on a facade shot it was taken literally.
 const MOTION = {
-  push: () => "The camera moves slowly and steadily forward into the room.",
+  push: () => "The camera edges slowly and steadily forward, staying outside any doorway.",
   lean: (dir) =>
-    `The camera eases forward into the room and leans slightly to the ${side(dir)} as it goes.`,
-  pull: () => "The camera moves slowly and steadily backwards, revealing more of the room.",
-  pullback: () => "The camera moves slowly and steadily backwards, revealing more of the room.",
+    `The camera edges slowly forward and leans slightly to the ${side(dir)} as it goes, staying outside any doorway.`,
+  pull: () => "The camera moves slowly and steadily backwards, revealing more of the scene.",
+  pullback: () => "The camera moves slowly and steadily backwards, revealing more of the scene.",
   pan: (dir) =>
-    `The camera tracks slowly and steadily sideways to the ${side(dir)} across the room, staying level.`,
-  drift: () => "The camera rises slowly and steadily, craning up over the room.",
+    `The camera tracks slowly and steadily sideways to the ${side(dir)} across the scene, staying level.`,
+  drift: () => "The camera rises slowly and steadily, craning up over the scene.",
   orbit: (dir) =>
-    `The camera arcs slowly and steadily around the room to the ${side(dir)}, staying level, ` +
-    "as if walking around the space.",
+    `The camera arcs slowly and steadily to the ${side(dir)}, staying level, as if stepping ` +
+    "a little to one side without leaving the spot.",
 };
 
 export function buildRequest({ imageUrl, motion, aspectRatio, quality, dir, withConcepts = true }) {
