@@ -536,42 +536,31 @@ function buildEditPlan(count, clipMotion) {
       zFrom = 1.0; zTo = 1.07;
       fromU = { x: 0, y: 0 }; toU = { x: 0.18, y: -0.12 };
     } else if (isLast) {
-      // Close by pulling back out to the full frame again, rising slightly: the standard
-      // "leave the room" move, and it ends on an uncropped picture.
-      type = "pull"; nBeats = 9;
-      zFrom = 1.08; zTo = 1.0;
-      fromU = { x: -0.2 * d, y: 0.45 }; toU = { x: 0, y: -0.1 };
+      // The closing shot moves forward too. It used to pull back out - the standard "leave the
+      // room" move - but a film of slow walks in that ends by reversing out of the last room
+      // reads as the camera changing its mind, and it was the one backwards move left after the
+      // body of the edit stopped using them. It opens on the full uncropped picture and eases in
+      // gently, less far than the others, so the film settles rather than lunges at the end.
+      type = "push"; nBeats = 9;
+      zFrom = 1.0; zTo = 1.045;
+      fromU = { x: 0, y: 0.1 }; toU = { x: 0.1 * d, y: -0.08 };
     } else {
-      // The move, chosen rather than cycled.
+      // ONE CAMERA, WALKING IN. A property videographer does not arc around a house or crane over
+      // a kitchen; they walk in slowly on a gimbal and let the room arrive. So every shot is a
+      // slow move forward, alternating between a straight push and the same push with a slight
+      // drift to one side - which is what a person carrying a camera actually does.
       //
-      // A fixed cycle repeats: with seven moves and eighteen rooms you see the identical run of
-      // seven two and a half times over, which is the sort of thing nobody can name but everyone
-      // notices. Instead each shot picks from the set under two rules an editor would apply
-      // without thinking - never the same move twice running, and never two moves of the same
-      // family back to back, so a push-in is not followed by a lean-in nor a pull-out by a
-      // pullback. Seeded on the position, so rebuilding the same property cuts identically.
+      // The varied set this replaces - pan, orbit, drift, lean, push - was built to stop the film
+      // reading as a template, and on the free 2D layer it was harmless. On a generated clip it
+      // was not. Orbit in particular asks an image-to-video model to swing around a building and
+      // show sides of it that were never photographed, so it invents them, and the house bends on
+      // screen. The move that looked most cinematic in a list was the one that broke the picture.
       //
-      // "orbit" is in the set although 2D cannot really orbit - it renders as an arcing travel,
-      // and becomes a true arc around the room once that shot is upgraded. That is the honest
-      // place to put a move the free version can only suggest: it is what the upgrade buys.
-      const family = { push: "in", lean: "in", pull: "out", pullback: "out", pan: "across", orbit: "around", drift: "up" };
-      const prev = plan[i - 1] ? plan[i - 1].type : "push";
-      // No pullback in the body of the film. Measured against a Reel-E listing video - 18 shots,
-      // 40 seconds - 12 shots push IN, 4 hold their zoom, and only 2 pull out. Ours had pullback
-      // in the general pool on the reasoning that a run of push-ins with one pull-out at the end
-      // reads as a template; what it actually produced was a film that kept backing away from
-      // rooms it had just moved into. Moving in is what a walkthrough does. The closing shot
-      // still pulls out - that is the one place the reference does it too.
-      const ALL = ["pan", "push", "orbit", "drift", "lean"];
-      const recent = plan.slice(-3).map((q) => q.type);
-      const legal = ALL.filter((m) => m !== prev && family[m] !== family[prev]);
-      // Also prefer something not used in the last three shots. Without this the draw clumps -
-      // one run came out with six pans in sixteen shots and not a single lean - which looks
-      // less varied than the fixed cycle this replaced. Falls back to the looser set when
-      // being this picky leaves nothing.
-      const fresh = legal.filter((m) => recent.indexOf(m) === -1);
-      const pool = fresh.length ? fresh : legal;
-      type = pool[Math.floor(seededRandom(i * 7.13 + 2.7) * pool.length) % pool.length];
+      // Variety now comes from how far each shot travels and which way it drifts, not from
+      // reaching for a different kind of move.
+      // The opening shot is already a straight push, so the first interior shot takes the drift -
+      // otherwise the film opens on two identical moves.
+      type = i % 2 === 1 ? "lean" : "push";
       nBeats = paceBeats(i, count);
 
       // Every shot gets its own amount, not just its own direction. Earlier all pushes moved
