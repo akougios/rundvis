@@ -997,54 +997,10 @@ async function measureClipMotion(v) {
   if (samples.length < 2) return null;
 
   // Smoothed over three samples, so one noisy frame cannot decide where the move begins.
-  let sm = samples.map((s, i) => {
+  const sm = samples.map((s, i) => {
     const a = samples[Math.max(0, i - 1)].d, b = s.d, c = samples[Math.min(samples.length - 1, i + 1)].d;
     return { t: s.t, d: (a + b + c) / 3 };
   });
-  // WHERE THE CLIP STOPS BEING THE PROPERTY - decided first, before anything else is measured.
-  //
-  // A camera move changes the frame at a fairly even rate. A door swinging open, or the camera
-  // carrying on through a doorway into a space that was never photographed, does not: it lands as
-  // a lurch, several times the clip's own usual rate of change. That is the one failure an agent
-  // cannot publish, because the far side of that door is invented.
-  //
-  // The prompt now asks the model not to do it, but a prompt is not a guarantee on a model with no
-  // seed - this file learned that once already, the hard way. So the clip is cut at the first
-  // lurch and everything after it is thrown away. If too little is left to carry the shot, the
-  // coverage rule in buildEditPlan drops the clip and the free 2D move takes the room instead.
-  //
-  // Measured against the MEDIAN of the clip's own samples, which a lurch cannot drag upwards
-  // because it is only a few samples out of thirty. Cutting here, before pace and peak are worked
-  // out, is what keeps the good opening of a clip usable: done afterwards, the lurch inflated the
-  // peak, which raised the "at pace" bar above everything else, and the clip was judged entirely
-  // on its worst two frames.
-  // Judged against the NEIGHBOURING samples, not the clip as a whole. A door swinging open is a
-  // spike - one or two samples far above what the clip was doing either side of them - while a
-  // fast camera move is sustained, and would be its own baseline. Read off the raw samples rather
-  // than the smoothed ones, because smoothing is exactly what flattens a spike.
-  //
-  // An earlier version compared against the median of the whole clip and required that median to
-  // be above a floor before it would look at all. On a real example - a clip that cut to a
-  // different room half way through, which measured 60 against a baseline of 0.1 - the guard meant
-  // the detector never ran. The one case it was written for was the one case it skipped.
-  const LURCH_MIN = 5;      // below this nothing is a lurch, whatever the neighbours are doing
-  const LURCH_RATIO = 5;    // ... and it must stand this far above them
-  let lurchAt;
-  for (let i = 0; i < samples.length; i++) {
-    const x = samples[i];
-    if (x.t <= 0.5 || x.d < LURCH_MIN) continue;
-    const near = [];
-    for (let j = Math.max(0, i - 6); j <= Math.min(samples.length - 1, i + 6); j++) {
-      if (j !== i) near.push(samples[j].d);
-    }
-    if (!near.length) continue;
-    near.sort((a2, b2) => a2 - b2);
-    const base = near[Math.floor(near.length / 2)];
-    if (x.d >= Math.max(LURCH_MIN, base * LURCH_RATIO)) { lurchAt = x.t; break; }
-  }
-  if (lurchAt !== undefined) sm = sm.filter((x) => x.t < lurchAt - STEP);
-  if (sm.length < 2) return { start: 0, moving: 0, dur, cut: lurchAt };
-
   const peak = sm.reduce((m, s) => Math.max(m, s.d), 0);
   // Two different questions, so two different thresholds.
   //
@@ -1062,9 +1018,8 @@ async function measureClipMotion(v) {
   let last = sm[sm.length - 1];
   for (let i = sm.length - 1; i >= 0; i--) { if (sm[i].d >= dead) { last = sm[i]; break; } }
   const start = Math.max(0, Math.min(first.t, dur));
-  let end = Math.min(dur, last.t + STEP);
-
-  return { start, moving: Math.max(0, end - start), dur, cut: lurchAt };
+  const end = Math.min(dur, last.t + STEP);
+  return { start, moving: Math.max(0, end - start), dur };
 }
 
 function releaseShot(shot) {
@@ -1910,17 +1865,7 @@ function Rundvis() {
           if (cancelled) return;
           // A clip that cannot be measured is left unmeasured on purpose: it then keeps its arc
           // length and plays from the start, which is what the edit did before any of this.
-          if (m) {
-            found[i] = m;
-            // Printed so a real run can be read back. Without it there is no way to tell a clip
-            // that was measured correctly from one the measurement simply failed on.
-            try {
-              console.log(
-                `[rundvis] rum ${i + 1}: bevægelse ${m.moving.toFixed(2)}s fra ${m.start.toFixed(2)}s ` +
-                `af ${m.dur.toFixed(2)}s${m.cut !== undefined ? ` — klippet ved ${m.cut.toFixed(2)}s` : ""}`
-              );
-            } catch (e) {}
-          }
+          if (m) found[i] = m;
         } catch (e) {
           /* leave unmeasured */
         } finally {

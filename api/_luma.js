@@ -36,53 +36,31 @@ export const QUALITIES = {
 
 const CLIP_SECONDS = "5s";
 
-// Says what the CAMERA does, and states plainly that nothing in the picture may change. These
-// models will happily redecorate a room, and for a listing video that is worse than no motion at
-// all: the video has to show the property that is actually for sale.
-//
-// "Photograph", not "room". This used to say "this exact room", which is a description that does
-// not fit the facade shot - and the facade shot is the one the camera kept walking into. Told it
-// was looking at a room, with a front door in frame, the model went and found the room.
-//
-// The camera is also told, in as many words, to stay put. Opening a door and travelling through
-// it is the single most damaging thing one of these clips can do: the far side of that door is
-// invented, it is not the property, and an agent cannot publish it.
+// Says what the CAMERA does, and states plainly that the room must not change. These models will
+// happily redecorate a room, and for a listing video that is worse than no motion at all: the
+// video has to show the property that is actually for sale.
 const BASE_PROMPT =
-  "Real estate listing video of this exact photograph. Photorealistic, filmed on a gimbal. " +
-  "Everything in the picture stays exactly as it is: nothing moves, nothing changes shape, " +
-  "nothing is added or removed, and every door, gate and window stays exactly as it appears - " +
-  "closed doors stay closed. No people, no animals, no text. " +
-  "Only the camera moves. It travels through the space shown in the photograph, and stays inside " +
-  "it: it does not pass through a doorway, a gate, a window or a wall, and it does not enter a " +
-  "room that is not already visible in the photograph.";
+  "Real estate listing video of this exact room. Photorealistic, filmed on a gimbal. " +
+  "The room, the furniture, the light and the view through the windows all stay exactly as " +
+  "they are in the photo: nothing moves, nothing changes shape, nothing is added or removed. " +
+  "No people, no animals, no text. Only the camera moves.";
 
 // The prompt says the move in words as well, and carries the direction. It is not redundant with
 // the concept: if a concept key is ever rejected the request is retried on the prompt alone, and
 // the move still comes out roughly right rather than becoming a random drift.
 const side = (dir) => (dir < 0 ? "right" : "left");
-// None of these say "into the room" any more. That phrasing was an instruction to go INSIDE, and
-// on a facade shot it was taken literally. They say "the space" rather than "the room" for the
-// same reason: a facade, a garden and a terrace are not rooms, and naming one is what sent the
-// camera looking for it in the first place.
-//
-// They do still say the camera moves, and they say it plainly. The first attempt at this fix
-// paired "stays where it is" with "edges forward", which are contradictory instructions - and a
-// model given both can settle the matter by not moving at all. A clip that does not move is the
-// failure this file spent days measuring and removing; the movement through the room is the whole
-// thing being paid for. The constraint is about where the camera may NOT go, never about whether
-// it goes.
 const MOTION = {
-  push: () => "The camera moves slowly and steadily forward through the space, stopping short of any doorway.",
+  push: () => "The camera moves slowly and steadily forward into the room.",
   lean: (dir) =>
-    `The camera moves slowly forward through the space and leans slightly to the ${side(dir)} as it goes, stopping short of any doorway.`,
-  pull: () => "The camera moves slowly and steadily backwards, revealing more of the scene.",
-  pullback: () => "The camera moves slowly and steadily backwards, revealing more of the scene.",
+    `The camera eases forward into the room and leans slightly to the ${side(dir)} as it goes.`,
+  pull: () => "The camera moves slowly and steadily backwards, revealing more of the room.",
+  pullback: () => "The camera moves slowly and steadily backwards, revealing more of the room.",
   pan: (dir) =>
-    `The camera tracks slowly and steadily sideways to the ${side(dir)} across the space, staying level.`,
-  drift: () => "The camera rises slowly and steadily, craning up over the space.",
+    `The camera tracks slowly and steadily sideways to the ${side(dir)} across the room, staying level.`,
+  drift: () => "The camera rises slowly and steadily, craning up over the room.",
   orbit: (dir) =>
-    `The camera arcs slowly and steadily around the space to the ${side(dir)}, staying level, as if ` +
-    "walking around it without leaving it.",
+    `The camera arcs slowly and steadily around the room to the ${side(dir)}, staying level, ` +
+    "as if walking around the space.",
 };
 
 export function buildRequest({ imageUrl, motion, aspectRatio, quality, dir, withConcepts = true }) {
