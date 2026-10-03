@@ -499,17 +499,9 @@ function paceBeats(i, count) {
 // remove. Utilisation wins. The arc is intact in the free edit and in the selective upgrade,
 // which is the path the interface steers towards anyway.
 //
-// A shot carrying a clip may run longer than its place in the arc, but never longer than the clip
-// actually moves (see measureClipMotion). Capped at 9 beats (4.66s) of a nominal 5-second clip:
-// "5s" is what we ask Luma for, not a guarantee of what comes back, and a shot outlasting its own
-// footage parks on a frozen frame.
-const CLIP_BONUS_BEATS = 2.5;
-const CLIP_MAX_BEATS = 9;
-// A clip is only worth showing if it moves for most of what the shot wants to hold. Below this
-// the free 2D move is the better picture: it moves for the whole shot, every time. Holding the
-// arc and dropping the clip beats shrinking the shot to fit a clip that stops early - which would
-// turn a four-second establishing shot into a one-second flicker.
-const CLIP_MIN_COVERAGE = 0.6;
+// No clip constants here any more. A shot runs for its place in the tempo arc, and a clip that
+// exists plays for that long from its start. The longest shot is 9 beats (4.66s), inside the
+// five seconds a clip runs, so a shot can never outlast its own footage.
 
 // clipMotion(i) -> { start, moving } in seconds, from measureClipMotion, or null when the shot has
 // no clip or it has not been measured yet. Unmeasured is treated as no clip: the shot keeps its
@@ -603,20 +595,30 @@ function buildEditPlan(count, clipMotion) {
       }
     }
 
-    // Fit the shot to the clip's MOVING part, not to its duration.
-    let useClip = true, clipStart = 0;
+    // A CLIP THAT EXISTS IS SHOWN. The measurement no longer decides anything.
+    //
+    // It used to drop a clip whose measured motion covered less than 60% of the shot, which on
+    // the opening and closing shots meant 2.79 seconds of movement out of five. That rule was
+    // written on the assumption that the measurement is trustworthy, and it has never been
+    // checked against a real generated clip - only against fixtures built here, where a video
+    // seeked frame by frame off a local server does not even advance.
+    //
+    // Then the camera language was narrowed to a slow push. A push moves far fewer pixels than an
+    // orbit or a pan, so the measured figure fell, and clips started failing a bar that had not
+    // moved. The result was a property where one room had a generated clip and the rest played as
+    // a slideshow - which is the worst of both: paid for, and not shown.
+    //
+    // So: if a clip was paid for, it plays, from its start, for as long as the shot runs. That is
+    // what this did before any of the measuring, and it was a state worth being at. The
+    // measurement still runs and still reports what it saw, because the dud clips it was built
+    // for are real - but it does not get to throw away a clip until its numbers have been checked
+    // against clips from the actual model.
+    const useClip = true, clipStart = 0;
     const m = motionAt(i);
-    // isFinite guards the arithmetic below: a malformed measurement would otherwise turn the
-    // shot's duration into NaN, and one NaN duration takes down the whole timeline.
-    if (m && isFinite(m.moving) && isFinite(m.start)) {
-      const movingBeats = Math.floor(((m.moving * 1000) / BEAT_MS) * 2) / 2;
-      if (movingBeats < nBeats * CLIP_MIN_COVERAGE) {
-        // The clip stops too early to carry this shot. Keep the arc, show the 2D move instead.
-        useClip = false;
-      } else {
-        clipStart = m.start;
-        nBeats = Math.min(nBeats + CLIP_BONUS_BEATS, CLIP_MAX_BEATS, movingBeats);
-      }
+    if (m && isFinite(m.moving)) {
+      try {
+        console.log(`[rundvis] rum ${i + 1}: målt bevægelse ${m.moving.toFixed(2)}s fra ${m.start.toFixed(2)}s af ${(m.dur || 0).toFixed(2)}s`);
+      } catch (e) {}
     }
 
     // The zoom ceiling, applied here rather than trusted shot by shot. KB_MAX_ZOOM was only ever
