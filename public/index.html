@@ -1447,6 +1447,33 @@ function Rundvis() {
     });
   };
   const removeImage = (id) => setImages((prev) => prev.filter((i) => i.id !== id));
+  // The photo grid wraps onto several rows, so the index under the pointer is found from the live
+  // layout rather than from arithmetic on a row width. No vertical tolerance here, unlike the
+  // single-row strip on the video page: in a grid, generosity above and below a tile means the
+  // row over and the row under.
+  const imgGridRef = useRef(null);
+  const [imgDragFrom, setImgDragFrom] = useState(null);
+  const imageIndexAt = (x, y) => {
+    const el = imgGridRef.current;
+    if (!el) return null;
+    const kids = el.querySelectorAll("[data-img]");
+    for (let i = 0; i < kids.length; i++) {
+      const r = kids[i].getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return i;
+    }
+    return null;
+  };
+  const reorderImage = (from, to) => {
+    if (from === to || from < 0 || to < 0) return;
+    setImages((prev) => {
+      if (from >= prev.length || to >= prev.length) return prev;
+      const next = [...prev];
+      const [x] = next.splice(from, 1);
+      next.splice(to, 0, x);
+      return next;
+    });
+  };
+
   const moveImage = (idx, dir) => {
     setImages((prev) => {
       const next = [...prev]; const target = idx + dir;
@@ -2181,10 +2208,40 @@ function Rundvis() {
               <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => handleFiles(e.target.files)} />
             </div>
             {images.length > 0 && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-7">
-                {images.map((img, idx) => (
-                  <div key={img.id} className="relative rounded-md overflow-hidden" style={{ backgroundColor: SURFACE, aspectRatio: "4/3" }}>
-                    <img src={img.src} alt="" className="w-full h-full object-cover" />
+              <div ref={imgGridRef} className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-7">
+                {images.map((img, idx) => {
+                  const held = imgDragFrom === idx;
+                  return (
+                  <div
+                    key={img.id}
+                    data-img
+                    onPointerDown={(e) => {
+                      // Not from the buttons sitting on top of the photo - a tap on the cross or an
+                      // arrow is a click, not the start of a drag.
+                      if (e.target.closest("button")) return;
+                      try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
+                      setImgDragFrom(idx);
+                    }}
+                    onPointerMove={(e) => {
+                      if (imgDragFrom === null) return;
+                      const j = imageIndexAt(e.clientX, e.clientY);
+                      if (j !== null && j !== imgDragFrom) { reorderImage(imgDragFrom, j); setImgDragFrom(j); }
+                    }}
+                    onPointerUp={() => setImgDragFrom(null)}
+                    onPointerCancel={() => setImgDragFrom(null)}
+                    className="relative rounded-md overflow-hidden"
+                    style={{
+                      backgroundColor: SURFACE,
+                      aspectRatio: "4/3",
+                      cursor: held ? "grabbing" : "grab",
+                      touchAction: "none",
+                      transform: held ? "scale(1.03)" : "none",
+                      transition: held ? "none" : "transform 160ms ease",
+                      zIndex: held ? 2 : 1,
+                      boxShadow: held ? "0 14px 34px rgba(23,27,26,0.22)" : "none",
+                    }}
+                  >
+                    <img src={img.src} alt="" draggable={false} className="w-full h-full object-cover" style={{ pointerEvents: "none" }} />
                     <div className="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ backgroundColor: "rgba(0,0,0,0.6)", color: "#fff" }}>{idx + 1}</div>
                     <div className="absolute top-1 right-1 flex gap-1">
                       <button onClick={() => removeImage(img.id)} className="p-1 rounded" style={{ backgroundColor: "rgba(0,0,0,0.6)" }}><Icon name="x" size={12} style={{ color: "#fff" }} /></button>
@@ -2194,7 +2251,8 @@ function Rundvis() {
                       <button onClick={() => moveImage(idx, 1)} disabled={idx === images.length - 1} className="p-1 rounded" style={{ backgroundColor: "rgba(0,0,0,0.6)", opacity: idx === images.length - 1 ? 0.4 : 1 }}><Icon name="arrowDown" size={12} style={{ color: "#fff" }} /></button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             <div className="flex items-center gap-3 flex-wrap">
