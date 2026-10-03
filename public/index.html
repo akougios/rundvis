@@ -1042,7 +1042,7 @@ function releaseShot(shot) {
 //
 // Composition goes through composeShowFrame, the same function the exporter uses, so the file
 // that is downloaded is frame for frame what was on screen.
-function FlythroughStage({ stills, specs, clips, onError, titles }) {
+function FlythroughStage({ stills, specs, clips, onError, titles, clockRef }) {
   // Held in a ref, not a dependency: typing an address must update the frame on the next tick,
   // not tear down the canvas and rebuild every plate on each keystroke.
   const titlesRef = React.useRef(titles);
@@ -1125,7 +1125,11 @@ function FlythroughStage({ stills, specs, clips, onError, titles }) {
         if (disposed) return;
         raf = requestAnimationFrame(tick);
         if (!refit() || !shots) return;
-        composeShowFrame(octx, W, H, shots, performance.now() - t0, { titles: titlesRef.current });
+        const c = clockRef && clockRef.current;
+        const tMs = c
+          ? (c.playing ? c.baseMs + (performance.now() - c.since) : c.baseMs)
+          : performance.now() - t0;
+        composeShowFrame(octx, W, H, shots, tMs, { titles: titlesRef.current });
       };
       raf = requestAnimationFrame(tick);
     };
@@ -1363,6 +1367,30 @@ function Rundvis() {
   // Which shape the walkthrough is previewed in. Defaults to wide: that is how a listing video is
   // watched on a property site, and it is the format the photos were shot in.
   const [previewFormat, setPreviewFormat] = useState("16:9");
+
+  // PREVIEW ONLY. The exporter runs its own loop at a fixed frame rate and never looks at this,
+  // so pausing or running at double speed changes what you are watching and nothing about the
+  // file you download.
+  //
+  // Held in a ref rather than state: the canvas effect would tear down and rebuild every plate if
+  // this were a dependency, and pressing pause is not a reason to rebuild a film.
+  const clockRef = useRef({ playing: true, baseMs: 0, since: 0 });
+  const [playing, setPlaying] = useState(true);   // for how the button looks
+  const scrubRef = useRef(null);
+  const scrubBarRef = useRef(null);
+
+  const filmNow = () => {
+    const c = clockRef.current;
+    return c.playing ? c.baseMs + (performance.now() - c.since) : c.baseMs;
+  };
+  const setClock = (patch) => {
+    const c = clockRef.current;
+    const now = performance.now();
+    // Bank the time run so far before changing anything, or pausing would rewrite history.
+    c.baseMs = c.playing ? c.baseMs + (now - c.since) : c.baseMs;
+    c.since = now;
+    Object.assign(c, patch);
+  };
 
   // Music. The agent supplies the track: bundling one would mean shipping music we have no
   // licence to redistribute, and a listing video is published publicly. An uploaded file is
@@ -1901,6 +1929,31 @@ function Rundvis() {
     [flythroughStills.length, motionSignature]
   );
 
+  // The scrubber is moved by writing to the element directly. Driving it from state would
+  // re-render the whole page - thumbnails and all - on every frame, to move one bar.
+  const showTotalMs = flythroughParams.reduce((a, sp) => a + sp.durationMs, 0);
+  useEffect(() => {
+    if (flythroughStatus !== "done" || !showTotalMs) return;
+    let raf = 0;
+    const step = () => {
+      raf = requestAnimationFrame(step);
+      const el = scrubRef.current;
+      if (!el) return;
+      const t = ((filmNow() % showTotalMs) + showTotalMs) % showTotalMs;
+      el.style.width = `${(t / showTotalMs) * 100}%`;
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [flythroughStatus, showTotalMs]);
+
+  const scrubTo = (clientX) => {
+    const bar = scrubBarRef.current;
+    if (!bar || !showTotalMs) return;
+    const r = bar.getBoundingClientRect();
+    const f = Math.max(0, Math.min(1, (clientX - r.left) / Math.max(1, r.width)));
+    setClock({ baseMs: f * showTotalMs });
+  };
+
   // Measure each clip once, as it arrives. The edit then fits itself to the result: a clip that
   // travels for the whole five seconds earns a longer shot, one that comes to rest early gets a
   // shorter one, and one that never really moves is dropped in favour of the free 2D move.
@@ -2380,7 +2433,39 @@ function Rundvis() {
                     clips={hqClips}
                     onError={(m) => { setFlythroughError(m); setFlythroughStatus("error"); }}
                     titles={titles}
+                    clockRef={clockRef}
                   />
+                </div>
+              )}
+
+              {/* Pause, and a line showing where in the film you are. The exporter never reads this
+                  clock, so stopping the preview changes nothing about the file that is
+                  downloaded. */}
+              {flythroughStatus === "done" && flythroughStills.length > 0 && (
+                <div className="flex items-center gap-3 mb-4">
+                  <button
+                    onClick={() => { setClock({ playing: !playing }); setPlaying((v) => !v); }}
+                    className="shrink-0 flex items-center justify-center rounded-full"
+                    style={{ width: 34, height: 34, border: `1px solid ${LINE}`, color: TEXT }}
+                    aria-label={playing ? "Pause" : "Afspil"}
+                  >
+                    <Icon name={playing ? "pause" : "play"} size={14} />
+                  </button>
+
+                  <div
+                    ref={scrubBarRef}
+                    onPointerDown={(e) => {
+                      try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
+                      scrubTo(e.clientX);
+                    }}
+                    onPointerMove={(e) => { if (e.buttons === 1) scrubTo(e.clientX); }}
+                    className="flex-1 relative"
+                    style={{ height: 22, cursor: "pointer", touchAction: "none" }}
+                  >
+                    <div className="absolute left-0 right-0" style={{ top: 10, height: 3, backgroundColor: LINE, borderRadius: 2 }} />
+                    <div ref={scrubRef} className="absolute left-0" style={{ top: 10, height: 3, width: "0%", backgroundColor: ACCENT, borderRadius: 2 }} />
+                  </div>
+
                 </div>
               )}
 
