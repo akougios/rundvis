@@ -52,27 +52,37 @@ const BASE_PROMPT =
   "Everything in the picture stays exactly as it is: nothing moves, nothing changes shape, " +
   "nothing is added or removed, and every door, gate and window stays exactly as it appears - " +
   "closed doors stay closed. No people, no animals, no text. " +
-  "Only the camera moves, and it stays where it is: it never travels through a doorway, a gate, " +
-  "a window or a wall, and it never enters a space that is not already visible in the photograph.";
+  "Only the camera moves. It travels through the space shown in the photograph, and stays inside " +
+  "it: it does not pass through a doorway, a gate, a window or a wall, and it does not enter a " +
+  "room that is not already visible in the photograph.";
 
 // The prompt says the move in words as well, and carries the direction. It is not redundant with
 // the concept: if a concept key is ever rejected the request is retried on the prompt alone, and
 // the move still comes out roughly right rather than becoming a random drift.
 const side = (dir) => (dir < 0 ? "right" : "left");
-// None of these say "into the room" any more. That phrasing was an instruction to go inside, and
-// on a facade shot it was taken literally.
+// None of these say "into the room" any more. That phrasing was an instruction to go INSIDE, and
+// on a facade shot it was taken literally. They say "the space" rather than "the room" for the
+// same reason: a facade, a garden and a terrace are not rooms, and naming one is what sent the
+// camera looking for it in the first place.
+//
+// They do still say the camera moves, and they say it plainly. The first attempt at this fix
+// paired "stays where it is" with "edges forward", which are contradictory instructions - and a
+// model given both can settle the matter by not moving at all. A clip that does not move is the
+// failure this file spent days measuring and removing; the movement through the room is the whole
+// thing being paid for. The constraint is about where the camera may NOT go, never about whether
+// it goes.
 const MOTION = {
-  push: () => "The camera edges slowly and steadily forward, staying outside any doorway.",
+  push: () => "The camera moves slowly and steadily forward through the space, stopping short of any doorway.",
   lean: (dir) =>
-    `The camera edges slowly forward and leans slightly to the ${side(dir)} as it goes, staying outside any doorway.`,
+    `The camera moves slowly forward through the space and leans slightly to the ${side(dir)} as it goes, stopping short of any doorway.`,
   pull: () => "The camera moves slowly and steadily backwards, revealing more of the scene.",
   pullback: () => "The camera moves slowly and steadily backwards, revealing more of the scene.",
   pan: (dir) =>
-    `The camera tracks slowly and steadily sideways to the ${side(dir)} across the scene, staying level.`,
-  drift: () => "The camera rises slowly and steadily, craning up over the scene.",
+    `The camera tracks slowly and steadily sideways to the ${side(dir)} across the space, staying level.`,
+  drift: () => "The camera rises slowly and steadily, craning up over the space.",
   orbit: (dir) =>
-    `The camera arcs slowly and steadily to the ${side(dir)}, staying level, as if stepping ` +
-    "a little to one side without leaving the spot.",
+    `The camera arcs slowly and steadily around the space to the ${side(dir)}, staying level, as if ` +
+    "walking around it without leaving it.",
 };
 
 export function buildRequest({ imageUrl, motion, aspectRatio, quality, dir, withConcepts = true }) {
