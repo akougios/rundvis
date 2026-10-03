@@ -19,6 +19,8 @@
   ::-webkit-scrollbar { height: 6px; width: 6px; }
   ::-webkit-scrollbar-thumb { background: #D8DBD6; border-radius: 3px; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes aande { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+  .aande { animation: aande 1.9s ease-in-out infinite; }
   .spin { animation: spin 1s linear infinite; }
   .kb-img { will-change: transform; transform-origin: center center; filter: saturate(1.08) contrast(1.04); }
   .kb-fade { opacity: 0; transition: opacity 550ms ease; }
@@ -26,6 +28,7 @@
   .vignette { background: radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,0.35) 100%); }
   @media (prefers-reduced-motion: reduce) {
     .spin { animation: none; }
+    .aande { animation: none; opacity: 0.8; }
     .kb-img { transform: none !important; }
   }
 </style>
@@ -1379,6 +1382,14 @@ function Rundvis() {
   // it costs money per run - the preview is the storyboard the agent approves first.
   const [hqStatus, setHqStatus] = useState("idle"); // idle|working|done|error
   const [hqProgress, setHqProgress] = useState({ current: 0, total: 0, phase: "" });
+  // Per room: "venter", "igang", "klar" or "fejl". A single count cannot say WHERE the work is,
+  // and with six clips in flight at once that is most of what is happening.
+  const [hqRoom, setHqRoom] = useState({});
+  // Ticks while generating, only so the bar can advance on elapsed time. A clip takes about three
+  // minutes, so a bar that moves only when one finishes stands perfectly still for minutes and
+  // then jumps, which reads as broken rather than as patient.
+  const [hqTick, setHqTick] = useState(0);
+  const hqStartedRef = useRef({});
   const [hqError, setHqError] = useState("");
   const [hqClips, setHqClips] = useState(null); // array of clip URLs, one per still (null = not generated)
   // What each clip's camera actually does, measured once per clip. null = not measured yet.
@@ -1450,6 +1461,26 @@ function Rundvis() {
   // thrown away or, worse, ending up under a different room.
   // How many rooms still have no generated clip. Drives both the price shown on step 2 and
   // whether there is anything left to buy.
+  // Only runs while something is generating, and does nothing but force a repaint so the bars can
+  // advance on elapsed time.
+  useEffect(() => {
+    if (hqStatus !== "working") return;
+    const t = setInterval(() => setHqTick((n) => n + 1), 250);
+    return () => clearInterval(t);
+  }, [hqStatus]);
+
+  // How far along one room is. A finished room is full; a room in flight fills against the three
+  // minutes a clip usually takes, and stops at 92% so it never sits full while still working.
+  const hqRoomFill = (i) => {
+    const st = hqRoom[i];
+    if (st === "klar") return 1;
+    if (st === "fejl") return 1;
+    if (st !== "igang") return 0;
+    const t0 = hqStartedRef.current[i];
+    if (!t0) return 0.02;
+    return Math.max(0.02, Math.min(0.92, (performance.now() - t0) / 1000 / HQ_SECONDS_PER_CLIP));
+  };
+
   const hqMissing = flythroughStills.filter((_, i) => !(hqClips && hqClips[i])).length;
 
   // Time and money for a given number of clips, so neither is a surprise after the click.
@@ -1951,6 +1982,9 @@ function Rundvis() {
     try {
       let done = 0;
       setHqProgress({ current: 0, total: indexes.length, phase: "generate" });
+      const startedAt = {};
+      hqStartedRef.current = startedAt;
+      setHqRoom(indexes.reduce((acc, i) => { acc[i] = "venter"; return acc; }, {}));
 
       // One photo, start to finish. Each runs independently, so a slow clip does not hold up
       // the others.
@@ -2024,8 +2058,11 @@ function Rundvis() {
       const arbejder = async () => {
         while (koe.length) {
           const i = koe.shift();
+          startedAt[i] = performance.now();
+          setHqRoom((prev) => ({ ...prev, [i]: "igang" }));
           try {
             clips[i] = await lavKlip(i);
+            setHqRoom((prev) => ({ ...prev, [i]: "klar" }));
             // Published as we go, so the walkthrough visibly improves clip by clip rather than
             // leaving the agent watching a spinner.
             setHqClips(clips.slice());
@@ -2033,6 +2070,7 @@ function Rundvis() {
             // One photo failing is worth reporting, but it must not throw away the clips that
             // succeeded - those are already paid for.
             fejl.push(`Billede ${i + 1}: ${err.message}`);
+            setHqRoom((prev) => ({ ...prev, [i]: "fejl" }));
           }
           done++;
           setHqProgress({ current: done, total: indexes.length, phase: "generate" });
@@ -2456,19 +2494,40 @@ function Rundvis() {
                     </button>
                   )}
 
+                  {/* One bar per room rather than one for the whole run. Six clips are generated at
+                      once and each takes about three minutes, so a single bar stood still for
+                      minutes and then jumped three places - which looks stuck. These fill against
+                      elapsed time, so something is always moving, and they say WHERE the work is. */}
                   {hqStatus === "working" && (
                     <div>
-                      <div className="w-full overflow-hidden" style={{ height: 2, backgroundColor: LINE }}>
-                        <div
-                          className="h-full transition-all"
-                          style={{
-                            backgroundColor: ACCENT,
-                            width: `${Math.round((hqProgress.current / Math.max(1, hqProgress.total)) * 100)}%`,
-                          }}
-                        />
+                      <div className="flex gap-1.5">
+                        {Object.keys(hqRoom).map((k) => {
+                          const i = Number(k);
+                          const st = hqRoom[i];
+                          const fill = hqRoomFill(i);
+                          return (
+                            <div
+                              key={k}
+                              className="flex-1 overflow-hidden"
+                              style={{ height: 3, backgroundColor: LINE, borderRadius: 2 }}
+                              title={`Rum ${i + 1}`}
+                            >
+                              <div
+                                className={st === "igang" ? "h-full aande" : "h-full"}
+                                style={{
+                                  width: `${Math.round(fill * 100)}%`,
+                                  backgroundColor: st === "fejl" ? AMBER : ACCENT,
+                                  transition: "width 400ms linear",
+                                }}
+                              />
+                            </div>
+                          );
+                        })}
                       </div>
                       <p className="text-xs mt-3" style={{ color: MUTED }}>
-                        {`Kameraet sættes i bevægelse — ${hqProgress.current} af ${hqProgress.total} rum.`}
+                        {hqProgress.current >= hqProgress.total
+                          ? "Samler videoen."
+                          : `Kameraet sættes i bevægelse i ${hqProgress.total} ${hqProgress.total === 1 ? "rum" : "rum"}.`}
                       </p>
                     </div>
                   )}
