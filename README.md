@@ -235,6 +235,31 @@ loft; værste overskridelse er 0,0000 px.
 | `LUMA_API_KEY` | Videogenerering. Uden den virker storyboardet stadig; kun opgraderingen fejler, med en forklarende besked. |
 | `BLOB_READ_WRITE_TOKEN` | Vercel Blob. Videomodellen kræver et offentligt tilgængeligt billede-URL. Sættes automatisk når en Blob Store oprettes under Vercel → Storage og forbindes til projektet. |
 | `VIDEO_PROXY_SECRET` | Valgfri. Nøgle til at signere video-URL'er. Falder tilbage til `LUMA_API_KEY` hvis den ikke er sat. |
+| `GEMINI_API_KEY` | Kun til sammenligningsknappen. Uden den virker alt andet; kun "Test med Veo" fejler, med en forklarende besked. |
+
+### Sammenligning: Veo ved siden af Luma
+
+"Test med Veo" laver **ét** klip af det valgte rum med `veo-3.1-generate-preview`, og en skifter
+lader afspilleren veksle mellem Lumas og Veos klip på samme rum. Det er en prøvebænk, ikke en
+funktion: Veo-klip gemmes i deres egen liste, så en test aldrig overskriver et klip der er betalt
+for.
+
+Prompten importeres fra `_luma.js`. To modeller med hver sin prompt er ikke en sammenligning af
+modeller.
+
+Forskellen der betyder noget er ikke sekundprisen men hvor få sekunder man kan købe. Luma sælger
+et fast 5-sekunders klip; Veo sælger 4, 6 eller 8. Vores klip står i gennemsnit 2,8 sekunder på
+skærmen, så der bestilles 4.
+
+| | Pr. klip | 12 rum |
+|---|---|---|
+| Luma Ray 3.2, 5s, 1080p | 1,20 $ (målt på faktura) | 14,40 $ |
+| Veo 3.1, 4s, 1080p | 0,80 $ (listepris) | 9,60 $ |
+| Veo 3.1 Fast, 4s | 0,32 $ (listepris) | 3,84 $ |
+
+To ting Veo ikke kan: der er **intet 1:1-format** (kun 16:9 og 9:16), og der er **ingen seed**,
+så samme uforudsigelighed som i dag. Og listepris er ikke faktura — det var præcis dér vores eget
+Luma-estimat lå 26 % forkert.
 
 ### Én model, ikke et modelvalg
 

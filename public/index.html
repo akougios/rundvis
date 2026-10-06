@@ -1413,6 +1413,12 @@ function Rundvis() {
   // Per room: "venter", "igang", "klar" or "fejl". A single count cannot say WHERE the work is,
   // and with six clips in flight at once that is most of what is happening.
   const [hqRoom, setHqRoom] = useState({});
+  // Veo, for comparison only. Kept in its own array so a Veo test never overwrites a clip that
+  // was paid for, and so the player can be switched between the two on the same room.
+  const [veoClips, setVeoClips] = useState(null);
+  const [veoStatus, setVeoStatus] = useState("idle");
+  const [veoError, setVeoError] = useState("");
+  const [showSource, setShowSource] = useState("luma");
   // Ticks while generating, only so the bar can advance on elapsed time. A clip takes about three
   // minutes, so a bar that moves only when one finishes stands perfectly still for minutes and
   // then jumps, which reads as broken rather than as patient.
@@ -2046,6 +2052,67 @@ function Rundvis() {
   // Generates clips for a set of photo indexes. Passing a single index is how the "test one
   // photo" button works: comparing three models then costs about a krone each instead of the
   // price of three whole properties.
+  // One room, through Veo, so the two models can be judged on the same photograph with the same
+  // words. Four seconds rather than Luma's fixed five: our longest shot holds for 4.66s, so eight
+  // would be paying for footage nobody sees.
+  const runVeo = async () => {
+    if (veoStatus === "working") return;
+    const i = compareIndex;
+    const still = flythroughStills[i];
+    if (!still) return;
+    setVeoStatus("working");
+    setVeoError("");
+    try {
+      // Scaled down before it goes: Veo carries the photo inside the request, and a 2560px source
+      // is both near the request size limit and wasted on a model that returns 1080p.
+      const small = await resizeImageDataUrl(still, 1280);
+      const comma = small.indexOf(",");
+      const mimeType = (small.slice(5, small.indexOf(";")) || "image/jpeg");
+      const imageBase64 = small.slice(comma + 1);
+
+      const create = await fetch("/api/generate-veo/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64,
+          mimeType,
+          motion: flythroughParams[i] ? flythroughParams[i].type : "push",
+          dir: flythroughParams[i] ? flythroughParams[i].dirSign : 1,
+          aspectRatio: previewFormat,
+          resolution: "1080p",
+        }),
+      });
+      const started = await create.json();
+      if (!create.ok) throw new Error(started.error || "Kunne ikke starte Veo-klippet.");
+
+      for (let attempt = 0; attempt < 120; attempt++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const st = await fetch("/api/generate-veo/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: started.name }),
+        });
+        const stJson = await st.json();
+        if (!st.ok) throw new Error(stJson.error || "Kunne ikke hente status.");
+        if (!stJson.done) continue;
+        if (stJson.error) throw new Error(stJson.error);
+        setVeoClips((prev) => {
+          const next = prev ? [...prev] : new Array(flythroughStills.length).fill(null);
+          while (next.length < flythroughStills.length) next.push(null);
+          next[i] = { url: stJson.videoUrl, sig: stJson.sig };
+          return next;
+        });
+        setShowSource("veo");
+        setVeoStatus("done");
+        return;
+      }
+      throw new Error("Veo blev ikke færdig i tide.");
+    } catch (err) {
+      setVeoError(err.message || "Veo fejlede.");
+      setVeoStatus("error");
+    }
+  };
+
   const runHighQuality = async (onlyIndexes) => {
     if (hqStatus === "working" || flythroughStills.length === 0) return;
     // Clips already produced are already paid for, so a full run only covers what is missing -
@@ -2427,10 +2494,10 @@ function Rundvis() {
                   }}
                 >
                   <FlythroughStage
-                    key={previewFormat + "-" + (hqClips ? hqClips.filter(Boolean).length : 0)}
+                    key={previewFormat + "-" + showSource + "-" + (hqClips ? hqClips.filter(Boolean).length : 0) + "-" + (veoClips ? veoClips.filter(Boolean).length : 0)}
                     stills={flythroughStills}
                     specs={flythroughParams}
-                    clips={hqClips}
+                    clips={showSource === "veo" ? veoClips : hqClips}
                     onError={(m) => { setFlythroughError(m); setFlythroughStatus("error"); }}
                     titles={titles}
                     clockRef={clockRef}
@@ -2613,6 +2680,57 @@ function Rundvis() {
                       );
                     })}
                   </div>
+                </div>
+              )}
+
+              {/* A bench, not a feature. Veo bills per second where Luma bills per clip, and our
+                  shots run under three seconds, so the question is whether Veo's best holds a room
+                  as well for four seconds as Ray 3.2 does for five. Same photograph, same prompt -
+                  the prompt is imported from _luma.js precisely so the only difference is the
+                  model. Kept in its own array so a test never overwrites a clip that was paid for. */}
+              {flythroughStatus === "done" && flythroughStills.length > 0 && (
+                <div className="mb-6 pt-5 flex flex-wrap items-center gap-3" style={{ borderTop: `1px solid ${LINE}` }}>
+                  <span className="text-[11px]" style={{ color: MUTED }}>
+                    {`Sammenlign rum ${compareIndex + 1}`}
+                  </span>
+                  <button
+                    onClick={runVeo}
+                    disabled={veoStatus === "working"}
+                    className="px-3 py-1.5 rounded-full text-xs"
+                    style={{
+                      border: `1px solid ${LINE}`,
+                      color: TEXT,
+                      opacity: veoStatus === "working" ? 0.5 : 1,
+                      cursor: veoStatus === "working" ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    {veoStatus === "working" ? "Veo arbejder…" : "Test med Veo"}
+                  </button>
+
+                  {veoClips && veoClips.some(Boolean) && (
+                    <span className="flex items-center gap-1">
+                      <span className="text-[11px] mr-1" style={{ color: MUTED }}>Viser</span>
+                      {[["luma", "Luma"], ["veo", "Veo"]].map(([k, label]) => {
+                        const on = showSource === k;
+                        return (
+                          <button
+                            key={k}
+                            onClick={() => setShowSource(k)}
+                            className="px-2.5 py-1 rounded-full text-[11px]"
+                            style={{
+                              border: `1px solid ${on ? ACCENT : LINE}`,
+                              backgroundColor: on ? ACCENT : "transparent",
+                              color: on ? "#fff" : MUTED,
+                            }}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </span>
+                  )}
+
+                  {veoError && <span className="text-xs" style={{ color: AMBER }}>{veoError}</span>}
                 </div>
               )}
 

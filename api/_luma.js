@@ -63,6 +63,14 @@ const MOTION = {
     "as if walking around the space.",
 };
 
+// The prompt on its own, so another provider can be sent exactly the same words. A comparison
+// between two models is only worth anything if the only thing that differs is the model.
+export function promptFor(motion, dir) {
+  const d = dir === -1 ? -1 : 1;
+  const words = (MOTION[motion] || MOTION.push)(d);
+  return `${BASE_PROMPT} ${words}`;
+}
+
 export function buildRequest({ imageUrl, motion, aspectRatio, quality, dir, withConcepts = true }) {
   const q = QUALITIES[quality] || QUALITIES.test;
   const d = dir === -1 ? -1 : 1;
