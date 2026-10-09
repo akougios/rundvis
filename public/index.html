@@ -2867,7 +2867,7 @@ function Rundvis() {
                         ? "Luma arbejder…"
                         : hqMissing === 0
                           ? "Luma er lavet"
-                          : `Test med Luma · $${(QUALITIES[hqQuality].usd).toFixed(2)}`}
+                          : `Test med Luma · $${(hqMissing * QUALITIES[hqQuality].usd).toFixed(2)}`}
                     </button>
                     <button
                       onClick={runVeo}
