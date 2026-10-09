@@ -2781,8 +2781,13 @@ function Rundvis() {
                   model. Kept in its own array so a test never overwrites a clip that was paid for. */}
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="mb-6 pt-5 flex flex-wrap items-center gap-3" style={{ borderTop: `1px solid ${LINE}` }}>
+                  {/* Says which room AND how to change it. The room is picked by tapping a
+                      photograph in the strip below, which is not a thing anyone guesses - the
+                      first run of this test was spent wondering why Veo only ever touched the
+                      opening shot. One clip is $1.60, so which room it lands on is worth a
+                      sentence. */}
                   <span className="text-[11px]" style={{ color: MUTED }}>
-                    {`Sammenlign rum ${compareIndex + 1}`}
+                    {`Tester rum ${compareIndex + 1} · tryk et billede nedenfor for at vælge et andet`}
                   </span>
                   <button
                     onClick={runVeo}
