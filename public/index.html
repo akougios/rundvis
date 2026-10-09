@@ -1834,6 +1834,34 @@ function Rundvis() {
       img.src = dataUrl;
     });
 
+  // Veo renders to a fixed 16:9 or 9:16 and PADS anything that does not match, so a 4:3 listing
+  // photo comes back with black bars baked into the MP4. Our compositor crops to fill rather than
+  // letterboxing, so it cannot undo them - it just shows them. Cropping the photo to the exact
+  // output aspect before it goes means Veo never has to pad. It is also the fairer comparison:
+  // Veo is handed the same framing the edit would have shown anyway.
+  const cropImageDataUrl = (dataUrl, outAspect, maxDimension) =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const base = coverRect(img.width, img.height, outAspect);
+        const scale = Math.min(1, maxDimension / Math.max(base.w, base.h));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(2, Math.round(base.w * scale));
+        canvas.height = Math.max(2, Math.round(base.h * scale));
+        const c = canvas.getContext("2d");
+        c.imageSmoothingEnabled = true;
+        c.imageSmoothingQuality = "high";
+        c.drawImage(
+          img,
+          (img.width - base.w) / 2, (img.height - base.h) / 2, base.w, base.h,
+          0, 0, canvas.width, canvas.height,
+        );
+        resolve(canvas.toDataURL("image/jpeg", 0.95));
+      };
+      img.onerror = () => resolve(dataUrl); // fall back to the original if decoding fails
+      img.src = dataUrl;
+    });
+
   // Prepares the photos for playback. There is no model to download and no inference to wait
   // for any more - only a resize where a photo is larger than the plates will ever need - so
   // this finishes in well under a second instead of the forty it used to take.
@@ -2055,6 +2083,39 @@ function Rundvis() {
   // One room, through Veo, so the two models can be judged on the same photograph with the same
   // words. Four seconds rather than Luma's fixed five: our longest shot holds for 4.66s, so eight
   // would be paying for footage nobody sees.
+  // WHICH CLIPS THE PLAYER GETS.
+  //
+  // Veo is tested on a single room. Handing the player veoClips on its own put a clip in that one
+  // room and null in every other, so the rest of the film dropped back to stills - which reads as
+  // "the AI stopped working", not as a comparison. The test clip is laid OVER the paid set
+  // instead, so exactly one room differs between the two tabs and everything else is held still
+  // for the eye.
+  //
+  // "basic" hands over nothing at all, which is the free Ken Burns version - the same film an
+  // agent sees before paying, and the only honest thing to compare the upgrade against.
+  const shownClips = useMemo(() => {
+    if (showSource === "basic") return null;
+    if (showSource !== "veo" || !veoClips) return hqClips;
+    const merged = hqClips ? hqClips.slice() : [];
+    while (merged.length < veoClips.length) merged.push(null);
+    veoClips.forEach((clip, i) => { if (clip) merged[i] = clip; });
+    return merged;
+  }, [showSource, hqClips, veoClips]);
+
+  // The tabs to offer. Only ever the versions that exist: no empty tab for an upgrade nobody has
+  // bought, and no Veo tab until a test clip has actually come back.
+  const sourceTabs = useMemo(() => {
+    const hasUpgrade = hqClips && hqClips.some(Boolean);
+    const hasVeo = veoClips && veoClips.some(Boolean);
+    const tabs = [];
+    // Basis is offered the moment there is anything to hold it up against - including a Veo test
+    // run on its own, which is a thing you can do without buying the upgrade first.
+    if (hasUpgrade || hasVeo) tabs.push(["basic", "Basis"]);
+    if (hasUpgrade) tabs.push(["luma", "Opgraderet"]);
+    if (hasVeo) tabs.push(["veo", "Veo"]);
+    return tabs;
+  }, [hqClips, veoClips]);
+
   const runVeo = async () => {
     if (veoStatus === "working") return;
     const i = compareIndex;
@@ -2064,8 +2125,11 @@ function Rundvis() {
     setVeoError("");
     try {
       // Scaled down before it goes: Veo carries the photo inside the request, and a 2560px source
-      // is both near the request size limit and wasted on a model that returns 1080p.
-      const small = await resizeImageDataUrl(still, 1280);
+      // is both near the request size limit and wasted on a model that returns 1080p. Cropped at
+      // the same time, to whichever of Veo's two shapes this format maps to - see veoAspect in
+      // _veo.js, where 1:1 is compared on the widescreen clip.
+      const veoAspect = previewFormat === "9:16" ? 9 / 16 : 16 / 9;
+      const small = await cropImageDataUrl(still, veoAspect, 1280);
       const comma = small.indexOf(",");
       const mimeType = (small.slice(5, small.indexOf(";")) || "image/jpeg");
       const imageBase64 = small.slice(comma + 1);
@@ -2483,6 +2547,33 @@ function Rundvis() {
 
               {flythroughStatus === "error" && <p className="text-xs" style={{ color: AMBER }}>{flythroughError}</p>}
 
+              {/* Which version you are watching, sat on top of the picture rather than down with
+                  the controls - it is a thing you flick between while looking at the video, so it
+                  belongs where your eyes already are. Hidden entirely until there is a second
+                  version to switch to, so the page an agent meets first still has one button. */}
+              {flythroughStatus === "done" && sourceTabs.length > 1 && (
+                <div className="flex items-center gap-1 mb-2">
+                  {sourceTabs.map(([k, label]) => {
+                    const on = showSource === k;
+                    return (
+                      <button
+                        key={k}
+                        onClick={() => setShowSource(k)}
+                        className="px-3 py-1.5 rounded-full text-[11px] tracking-wide"
+                        style={{
+                          border: `1px solid ${on ? ACCENT : LINE}`,
+                          backgroundColor: on ? ACCENT : "transparent",
+                          color: on ? "#fff" : MUTED,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div
                   className="relative rounded-xl overflow-hidden mb-3 w-full"
@@ -2497,7 +2588,7 @@ function Rundvis() {
                     key={previewFormat + "-" + showSource + "-" + (hqClips ? hqClips.filter(Boolean).length : 0) + "-" + (veoClips ? veoClips.filter(Boolean).length : 0)}
                     stills={flythroughStills}
                     specs={flythroughParams}
-                    clips={showSource === "veo" ? veoClips : hqClips}
+                    clips={shownClips}
                     onError={(m) => { setFlythroughError(m); setFlythroughStatus("error"); }}
                     titles={titles}
                     clockRef={clockRef}
@@ -2706,29 +2797,6 @@ function Rundvis() {
                   >
                     {veoStatus === "working" ? "Veo arbejder…" : "Test med Veo"}
                   </button>
-
-                  {veoClips && veoClips.some(Boolean) && (
-                    <span className="flex items-center gap-1">
-                      <span className="text-[11px] mr-1" style={{ color: MUTED }}>Viser</span>
-                      {[["luma", "Luma"], ["veo", "Veo"]].map(([k, label]) => {
-                        const on = showSource === k;
-                        return (
-                          <button
-                            key={k}
-                            onClick={() => setShowSource(k)}
-                            className="px-2.5 py-1 rounded-full text-[11px]"
-                            style={{
-                              border: `1px solid ${on ? ACCENT : LINE}`,
-                              backgroundColor: on ? ACCENT : "transparent",
-                              color: on ? "#fff" : MUTED,
-                            }}
-                          >
-                            {label}
-                          </button>
-                        );
-                      })}
-                    </span>
-                  )}
 
                   {veoError && <span className="text-xs" style={{ color: AMBER }}>{veoError}</span>}
                 </div>
