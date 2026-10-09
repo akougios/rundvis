@@ -41,12 +41,6 @@ export default async function handler(req) {
   const range = req.headers.get("range");
   const headersOut = {};
   if (range) headersOut.Range = range;
-  // Google hands back a URL that only opens with the API key. Luma's media host needs no key, so
-  // this is the one provider-specific line in here - the signature is still what proves the URL
-  // came from us, host or no host.
-  if (/^https:\/\/generativelanguage\.googleapis\.com\//.test(url) && process.env.GEMINI_API_KEY) {
-    headersOut["x-goog-api-key"] = process.env.GEMINI_API_KEY;
-  }
   const upstream = await fetch(url, { headers: headersOut });
   if (!upstream.ok && upstream.status !== 206) {
     return bad(502, `Kunne ikke hente videoen (${upstream.status}).`);
