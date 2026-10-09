@@ -1418,6 +1418,8 @@ function Rundvis() {
   const [veoClips, setVeoClips] = useState(null);
   const [veoStatus, setVeoStatus] = useState("idle");
   const [veoError, setVeoError] = useState("");
+  const [veoRoom, setVeoRoom] = useState({});   // same per-room states as hqRoom
+  const veoStartedRef = useRef({});
   const [showSource, setShowSource] = useState("luma");
   // Ticks while generating, only so the bar can advance on elapsed time. A clip takes about three
   // minutes, so a bar that moves only when one finishes stands perfectly still for minutes and
@@ -1525,10 +1527,10 @@ function Rundvis() {
   // Only runs while something is generating, and does nothing but force a repaint so the bars can
   // advance on elapsed time.
   useEffect(() => {
-    if (hqStatus !== "working") return;
+    if (hqStatus !== "working" && veoStatus !== "working") return;
     const t = setInterval(() => setHqTick((n) => n + 1), 250);
     return () => clearInterval(t);
-  }, [hqStatus]);
+  }, [hqStatus, veoStatus]);
 
   // How far along one room is. A finished room is full; a room in flight fills against the three
   // minutes a clip usually takes, and stops at 92% so it never sits full while still working.
@@ -1542,7 +1544,19 @@ function Rundvis() {
     return Math.max(0.02, Math.min(0.92, (performance.now() - t0) / 1000 / HQ_SECONDS_PER_CLIP));
   };
 
+  // Same bar for the Veo run. A Veo clip takes longer than a Luma one, so it fills more slowly;
+  // the point of the number is only that something is always moving.
+  const veoRoomFill = (i) => {
+    const st = veoRoom[i];
+    if (st === "klar" || st === "fejl") return 1;
+    if (st !== "igang") return 0;
+    const t0 = veoStartedRef.current[i];
+    if (!t0) return 0.02;
+    return Math.max(0.02, Math.min(0.92, (performance.now() - t0) / 1000 / VEO_SECONDS_PER_CLIP));
+  };
+
   const hqMissing = flythroughStills.filter((_, i) => !(hqClips && hqClips[i])).length;
+  const veoMissing = flythroughStills.filter((_, i) => !(veoClips && veoClips[i])).length;
 
   // Time and money for a given number of clips, so neither is a surprise after the click.
   const hqEstimate = (n) => ({
@@ -1808,6 +1822,16 @@ function Rundvis() {
   const HQ_CONCURRENCY = 6;
   // Rough seconds per clip, for the estimates shown before the agent commits to paying.
   const HQ_SECONDS_PER_CLIP = 180;
+
+  // TEMPORARY - the Luma/Veo bake-off. Both models are run over the whole property so the two
+  // films can be watched end to end and one of them chosen; once that choice is made, this and
+  // everything else marked BAKE-OFF comes out and the loser goes with it.
+  //
+  // Two at a time, not six. Veo's per-minute limit on a new paid project is far tighter than
+  // Luma's, and a 429 here costs a round trip on a request that carries the whole photograph.
+  const VEO_CONCURRENCY = 2;
+  const VEO_SECONDS_PER_CLIP = 150;
+  const VEO_USD_PER_CLIP = 1.60;   // 8s at $0.20/s - see VEO_MODES in api/_veo.js
   // Photos are kept at up to this size. A 1920-wide export at the tightest 10% crop samples at
   // most ~2130 source pixels across, so 2560 leaves headroom while keeping several photos in
   // memory comfortably. Anything smaller is left exactly as uploaded and never re-encoded.
@@ -2053,6 +2077,9 @@ function Rundvis() {
   // middle third of a 42-second film with no generated motion at all. Segmenting spreads them
   // across the running time and still picks the shot in each stretch that is on screen longest.
   const HQ_HIGHLIGHTS = 12;
+  // Unused while the BAKE-OFF is up: both test buttons run every room, because comparing two
+  // models on a subset of the property tells you nothing. Kept, not deleted - the single
+  // "Opgrader video" button that picks only the highlights comes back with the decision.
   const hqHighlightIndexes = useMemo(() => {
     const total = basePlan.length;
     if (total === 0) return [];
@@ -2111,69 +2138,109 @@ function Rundvis() {
     // Basis is offered the moment there is anything to hold it up against - including a Veo test
     // run on its own, which is a thing you can do without buying the upgrade first.
     if (hasUpgrade || hasVeo) tabs.push(["basic", "Basis"]);
-    if (hasUpgrade) tabs.push(["luma", "Opgraderet"]);
+    if (hasUpgrade) tabs.push(["luma", "Luma"]);
     if (hasVeo) tabs.push(["veo", "Veo"]);
     return tabs;
   }, [hqClips, veoClips]);
 
+  // BAKE-OFF. Veo across the whole property, so the two films can be compared end to end
+  // instead of one room at a time. Deliberately mirrors runHighQuality - same worker pool, same
+  // per-room states, same rule that a clip already produced is already paid for and is never
+  // generated twice - so the only difference between the two runs is the model.
   const runVeo = async () => {
-    if (veoStatus === "working") return;
-    const i = compareIndex;
-    const still = flythroughStills[i];
-    if (!still) return;
+    if (veoStatus === "working" || flythroughStills.length === 0) return;
+    const clips = veoClips ? veoClips.slice() : new Array(flythroughStills.length).fill(null);
+    while (clips.length < flythroughStills.length) clips.push(null);
+    const indexes = flythroughStills.map((_, i) => i).filter((i) => !clips[i]);
+    if (indexes.length === 0) { setShowSource("veo"); return; }
+
     setVeoStatus("working");
     setVeoError("");
-    try {
-      // Scaled down before it goes: Veo carries the photo inside the request, and a 2560px source
-      // is both near the request size limit and wasted on a model that returns 1080p. Cropped at
-      // the same time, to whichever of Veo's two shapes this format maps to - see veoAspect in
-      // _veo.js, where 1:1 is compared on the widescreen clip.
+    const startedAt = {};
+    veoStartedRef.current = startedAt;
+    setVeoRoom(indexes.reduce((acc, i) => { acc[i] = "venter"; return acc; }, {}));
+
+    const lavKlip = async (i) => {
+      // Cropped to the shape Veo will render, so it never pads the photo and bakes black bars
+      // into the clip. See cropImageDataUrl.
       const veoAspect = previewFormat === "9:16" ? 9 / 16 : 16 / 9;
-      const small = await cropImageDataUrl(still, veoAspect, 1280);
+      const small = await cropImageDataUrl(flythroughStills[i], veoAspect, 1280);
       const comma = small.indexOf(",");
-      const mimeType = (small.slice(5, small.indexOf(";")) || "image/jpeg");
+      const mimeType = small.slice(5, small.indexOf(";")) || "image/jpeg";
       const imageBase64 = small.slice(comma + 1);
 
-      const create = await fetch("/api/generate-veo/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageBase64,
-          mimeType,
-          motion: flythroughParams[i] ? flythroughParams[i].type : "push",
-          dir: flythroughParams[i] ? flythroughParams[i].dirSign : 1,
-          aspectRatio: previewFormat,
-          resolution: "1080p",
-        }),
+      const payload = JSON.stringify({
+        imageBase64,
+        mimeType,
+        motion: flythroughParams[i] ? flythroughParams[i].type : "push",
+        dir: flythroughParams[i] ? flythroughParams[i].dirSign : 1,
+        aspectRatio: previewFormat,
+        resolution: "1080p",
       });
-      const started = await create.json();
-      if (!create.ok) throw new Error(started.error || "Kunne ikke starte Veo-klippet.");
+
+      // A 429 means wait, not fail - same as Luma. Veo's limits on a new paid project are tight
+      // enough that two jobs in flight can still trip them.
+      let started;
+      for (let forsoeg = 0; ; forsoeg++) {
+        const create = await fetch("/api/generate-veo/create", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: payload,
+        });
+        started = await create.json();
+        if (create.ok) break;
+        if (!started.retryable || forsoeg >= 20) {
+          throw new Error(started.error || "Kunne ikke starte Veo-klippet.");
+        }
+        await new Promise((r) => setTimeout(r, Math.min(8000 + forsoeg * 4000, 30000)));
+      }
 
       for (let attempt = 0; attempt < 120; attempt++) {
         await new Promise((r) => setTimeout(r, 5000));
         const st = await fetch("/api/generate-veo/status", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: started.name }),
         });
         const stJson = await st.json();
         if (!st.ok) throw new Error(stJson.error || "Kunne ikke hente status.");
         if (!stJson.done) continue;
         if (stJson.error) throw new Error(stJson.error);
-        setVeoClips((prev) => {
-          const next = prev ? [...prev] : new Array(flythroughStills.length).fill(null);
-          while (next.length < flythroughStills.length) next.push(null);
-          next[i] = { url: stJson.videoUrl, sig: stJson.sig };
-          return next;
-        });
-        setShowSource("veo");
-        setVeoStatus("done");
-        return;
+        return { url: stJson.videoUrl, sig: stJson.sig };
       }
-      throw new Error("Veo blev ikke færdig i tide.");
-    } catch (err) {
-      setVeoError(err.message || "Veo fejlede.");
-      setVeoStatus("error");
+      throw new Error(`Veo-klip ${i + 1} blev ikke færdigt i tide.`);
+    };
+
+    const koe = indexes.slice();
+    const fejl = [];
+    const arbejder = async () => {
+      while (koe.length) {
+        const i = koe.shift();
+        startedAt[i] = performance.now();
+        setVeoRoom((prev) => ({ ...prev, [i]: "igang" }));
+        try {
+          clips[i] = await lavKlip(i);
+          setVeoRoom((prev) => ({ ...prev, [i]: "klar" }));
+          // Published as they land, so the Veo tab fills in while you watch.
+          setVeoClips(clips.slice());
+          setShowSource("veo");
+        } catch (err) {
+          // One room failing must not throw away the rooms that succeeded - at $1.60 a clip
+          // those are the expensive part.
+          fejl.push(`Rum ${i + 1}: ${err.message}`);
+          setVeoRoom((prev) => ({ ...prev, [i]: "fejl" }));
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(VEO_CONCURRENCY, koe.length) }, arbejder));
+
+    if (fejl.length) {
+      const unikke = [...new Set(fejl.map((f) => f.replace(/^Rum \d+: /, "")))];
+      setVeoError(
+        `${fejl.length} af ${indexes.length} Veo-klip fejlede. ` +
+        unikke.slice(0, 2).join(" — ") +
+        (unikke.length > 2 ? ` (+${unikke.length - 2} andre årsager)` : "")
+      );
+      setVeoStatus(clips.some(Boolean) ? "done" : "error");
+    } else {
+      setVeoStatus("done");
     }
   };
 
@@ -2774,60 +2841,96 @@ function Rundvis() {
                 </div>
               )}
 
-              {/* A bench, not a feature. Veo bills per second where Luma bills per clip, and our
-                  shots run under three seconds, so the question is whether Veo's best holds a room
-                  as well for four seconds as Ray 3.2 does for five. Same photograph, same prompt -
-                  the prompt is imported from _luma.js precisely so the only difference is the
-                  model. Kept in its own array so a test never overwrites a clip that was paid for. */}
+              {/* BAKE-OFF - TEMPORARY. Two buttons, two models, the whole property through each,
+                  so the films can be watched end to end and one model chosen. Both runs skip
+                  rooms that already have a clip, so pressing a button twice does not pay twice.
+                  The price is on the button because Veo is eight times Luma per room and that is
+                  the whole reason this comparison is being run. Comes out with the decision. */}
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
-                <div className="mb-6 pt-5 flex flex-wrap items-center gap-3" style={{ borderTop: `1px solid ${LINE}` }}>
-                  {/* Says which room AND how to change it. The room is picked by tapping a
-                      photograph in the strip below, which is not a thing anyone guesses - the
-                      first run of this test was spent wondering why Veo only ever touched the
-                      opening shot. One clip is $1.60, so which room it lands on is worth a
-                      sentence. */}
-                  <span className="text-[11px]" style={{ color: MUTED }}>
-                    {`Tester rum ${compareIndex + 1} · tryk et billede nedenfor for at vælge et andet`}
-                  </span>
-                  <button
-                    onClick={runVeo}
-                    disabled={veoStatus === "working"}
-                    className="px-3 py-1.5 rounded-full text-xs"
-                    style={{
-                      border: `1px solid ${LINE}`,
-                      color: TEXT,
-                      opacity: veoStatus === "working" ? 0.5 : 1,
-                      cursor: veoStatus === "working" ? "not-allowed" : "pointer",
-                    }}
-                  >
-                    {veoStatus === "working" ? "Veo arbejder…" : "Test med Veo"}
-                  </button>
+                <div className="mb-8 pt-5" style={{ borderTop: `1px solid ${LINE}` }}>
+                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>
+                    Sammenlign modellerne · begge kører alle {flythroughStills.length} rum
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => runHighQuality()}
+                      disabled={hqStatus === "working" || veoStatus === "working"}
+                      className="px-4 py-2 rounded-full text-xs"
+                      style={{
+                        border: `1px solid ${LINE}`,
+                        color: TEXT,
+                        opacity: hqStatus === "working" || veoStatus === "working" ? 0.45 : 1,
+                        cursor: hqStatus === "working" || veoStatus === "working" ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {hqStatus === "working"
+                        ? "Luma arbejder…"
+                        : hqMissing === 0
+                          ? "Luma er lavet"
+                          : `Test med Luma · $${(QUALITIES[hqQuality].usd).toFixed(2)}`}
+                    </button>
+                    <button
+                      onClick={runVeo}
+                      disabled={hqStatus === "working" || veoStatus === "working"}
+                      className="px-4 py-2 rounded-full text-xs"
+                      style={{
+                        border: `1px solid ${LINE}`,
+                        color: TEXT,
+                        opacity: hqStatus === "working" || veoStatus === "working" ? 0.45 : 1,
+                        cursor: hqStatus === "working" || veoStatus === "working" ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {veoStatus === "working"
+                        ? "Veo arbejder…"
+                        : veoMissing === 0
+                          ? "Veo er lavet"
+                          : `Test med Veo · $${(veoMissing * VEO_USD_PER_CLIP).toFixed(2)}`}
+                    </button>
+                  </div>
 
-                  {veoError && <span className="text-xs" style={{ color: AMBER }}>{veoError}</span>}
+                  {/* One bar per room, same as the Luma run. */}
+                  {veoStatus === "working" && (
+                    <div className="mt-4">
+                      <div className="flex gap-1.5">
+                        {Object.keys(veoRoom).map((k) => {
+                          const i = Number(k);
+                          const st = veoRoom[i];
+                          return (
+                            <div
+                              key={k}
+                              className="flex-1 overflow-hidden"
+                              style={{ height: 3, backgroundColor: LINE, borderRadius: 2 }}
+                              title={`Rum ${i + 1}`}
+                            >
+                              <div
+                                className={st === "igang" ? "h-full aande" : "h-full"}
+                                style={{
+                                  width: `${Math.round(veoRoomFill(i) * 100)}%`,
+                                  backgroundColor: st === "fejl" ? AMBER : ACCENT,
+                                  transition: "width 400ms linear",
+                                }}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p className="text-xs mt-3" style={{ color: MUTED }}>
+                        Veo arbejder sig gennem rummene. To ad gangen, så kvoten holder.
+                      </p>
+                    </div>
+                  )}
+
+                  {veoError && <p className="text-xs mt-3" style={{ color: AMBER }}>{veoError}</p>}
                 </div>
               )}
 
-              {/* One action, no figures. What it costs is our business, not something to put in
-                  front of an agent mid-demo, and the two-step "try one room first" flow was there
-                  to protect a budget rather than to help anyone decide. */}
+              {/* BAKE-OFF: the single "Opgradér video" button has moved up into the comparison row
+                  as "Test med Luma", so the two models sit side by side under one heading. When
+                  the bake-off comes out, this is where the one button returns - full width,
+                  no figures: what it costs is our business, not something to put in front of an
+                  agent mid-demo. */}
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="mb-10">
-                  {hqStatus !== "working" && hqMissing > 0 && (
-                    <button
-                      onClick={() => runHighQuality(hqHighlightIndexes)}
-                      className="w-full rounded-full"
-                      style={{
-                        backgroundColor: ACCENT,
-                        color: "#fff",
-                        padding: "15px 0",
-                        fontSize: 15,
-                        letterSpacing: "0.005em",
-                      }}
-                    >
-                      Opgradér video
-                    </button>
-                  )}
-
                   {/* One bar per room rather than one for the whole run. Six clips are generated at
                       once and each takes about three minutes, so a single bar stood still for
                       minutes and then jumped three places - which looks stuck. These fill against
