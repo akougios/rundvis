@@ -52,7 +52,7 @@ export function buildVeoRequest({ imageBase64, mimeType, motion, aspectRatio, di
     parameters: {
       aspectRatio: veoAspect(aspectRatio),
       resolution: resolution === "720p" ? "720p" : "1080p",
-      durationSeconds: String(VEO_SECONDS),
+      durationSeconds: VEO_SECONDS, // a number, not a string: Veo type-checks this field
     },
   };
 }
