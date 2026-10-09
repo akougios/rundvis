@@ -16,11 +16,29 @@ export const VEO_BASE = "https://generativelanguage.googleapis.com/v1beta";
 // we have; if it does, Fast is the next question and a much cheaper one.
 export const VEO_MODEL = "veo-3.1-generate-preview";
 
-// Four seconds. Our longest shot holds for 4.66s and the median for 2.8s, so eight seconds would
-// be paying for footage no one will ever see - which is exactly the waste this project already
-// measured once on Luma's fixed five.
-export const VEO_SECONDS = 4;
+// Resolution and duration are ONE choice, not two. Veo rejected 1080p at four seconds
+// ("1080p is not supported for a duration of 4 seconds"), so the legal pairs live in a table and
+// the two values are always read from the same row - an invalid combination cannot be built.
+//
+// 1080p is the default because the point of this button is comparing Veo's best against Luma's
+// 1080p, and a 720p clip would lose that comparison on resolution rather than on motion. The cost
+// is that eight seconds is more footage than we use: our longest shot holds 4.66s and the median
+// 2.8s, so roughly half of each clip is paid for and cut. At $1.60 a clip that is the price of an
+// honest comparison; 720p/4s stays available at $0.80 for a cheaper look.
+export const VEO_MODES = {
+  "1080p": { resolution: "1080p", seconds: 8 },
+  "720p": { resolution: "720p", seconds: 4 },
+};
+export const VEO_DEFAULT_MODE = "1080p";
 export const VEO_USD_PER_SECOND = 0.20;   // list price, video without audio
+
+export function veoMode(resolution) {
+  return VEO_MODES[resolution] || VEO_MODES[VEO_DEFAULT_MODE];
+}
+
+export function veoCostUsd(resolution) {
+  return veoMode(resolution).seconds * VEO_USD_PER_SECOND;
+}
 
 // Veo takes 16:9 and 9:16. There is no square, so a 1:1 preview is compared on the widescreen
 // clip, cropped the same way a Luma clip would be.
@@ -43,6 +61,7 @@ export const VEO_IMAGE_SHAPES = ["bytesBase64Encoded", "inlineData"];
 
 export function buildVeoRequest({ imageBase64, mimeType, motion, aspectRatio, dir, resolution, shape }) {
   const mt = mimeType || "image/jpeg";
+  const mode = veoMode(resolution);
   const image =
     shape === "inlineData"
       ? { inlineData: { mimeType: mt, data: imageBase64 } }
@@ -51,8 +70,8 @@ export function buildVeoRequest({ imageBase64, mimeType, motion, aspectRatio, di
     instances: [{ prompt: promptFor(motion, dir), image }],
     parameters: {
       aspectRatio: veoAspect(aspectRatio),
-      resolution: resolution === "720p" ? "720p" : "1080p",
-      durationSeconds: VEO_SECONDS, // a number, not a string: Veo type-checks this field
+      resolution: mode.resolution,
+      durationSeconds: mode.seconds, // a number, not a string: Veo type-checks this field
     },
   };
 }
