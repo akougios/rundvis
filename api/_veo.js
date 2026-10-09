@@ -28,14 +28,27 @@ function veoAspect(aspectRatio) {
   return aspectRatio === "9:16" ? "9:16" : "16:9";
 }
 
-export function buildVeoRequest({ imageBase64, mimeType, motion, aspectRatio, dir, resolution }) {
+// TWO SHAPES, TRIED IN ORDER, because the documentation and the live API disagree.
+//
+// Google's own Veo page shows the image as {"inlineData": {"mimeType", "data"}}, which is the
+// shape the chat-style generateContent endpoint uses. Sent to predictLongRunning it comes back
+// 400: "`inlineData` isn't supported by this model." The predict-style endpoints elsewhere in
+// Vertex take {"bytesBase64Encoded", "mimeType"} instead, so that is tried first and the
+// documented one kept as the fallback.
+//
+// Guessing which is right costs a deploy and a wait each time, and this environment cannot reach
+// Google to find out. Trying both costs one request when the first is right, two when it is not,
+// and the answer comes back in the response so it only has to be learned once.
+export const VEO_IMAGE_SHAPES = ["bytesBase64Encoded", "inlineData"];
+
+export function buildVeoRequest({ imageBase64, mimeType, motion, aspectRatio, dir, resolution, shape }) {
+  const mt = mimeType || "image/jpeg";
+  const image =
+    shape === "inlineData"
+      ? { inlineData: { mimeType: mt, data: imageBase64 } }
+      : { bytesBase64Encoded: imageBase64, mimeType: mt };
   return {
-    instances: [
-      {
-        prompt: promptFor(motion, dir),
-        image: { inlineData: { mimeType: mimeType || "image/jpeg", data: imageBase64 } },
-      },
-    ],
+    instances: [{ prompt: promptFor(motion, dir), image }],
     parameters: {
       aspectRatio: veoAspect(aspectRatio),
       resolution: resolution === "720p" ? "720p" : "1080p",
