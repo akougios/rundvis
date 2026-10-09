@@ -225,7 +225,9 @@ function widthLoss(iw, ih, outAspect) {
 // frame - stays under and is cropped as before.
 const FIT_WHEN_LOSS_OVER = 0.4;
 
-// The bed is built once and kept, at a fraction of the output size.
+// The bed is built once and kept, at a fraction of the output size - once per canvas size, and
+// for a clip that means once rather than twice a second. It is blurred past recognition, so a bed
+// standing still under a moving picture is not something an eye can find.
 //
 // Blurring at full size every frame is what it used to do, and it cost the earth: measured in
 // Chromium, a vertical frame took 41.6ms against 16.7ms for a horizontal one, and 119 of 120
@@ -274,9 +276,19 @@ function drawBedded(octx, W, H, shot, src, sw, sh, scale, dx, dy, bedKey) {
   // crop, so in a vertical frame it is about twice the width the fitted picture needs - four
   // times the pixels, resampled on every frame. Resizing it once here and reusing it is the
   // other half of the stutter fix; the first half was the bed.
+  //
+  // NOT for a video. The prescale is a cache, and a cache of a source that changes thirty times a
+  // second is a freeze: measured on a 16:9 clip in a 1:1 frame, the canvas redrew 44 times a
+  // second while this cache - and therefore the picture inside it - was rebuilt 2.5 times. That
+  // is the stutter, and it is not a slow phone, it is the same frame shown sixteen times.
+  //
+  // A clip never needed it anyway: the prescale exists because a PLATE is built oversized for a
+  // cover crop, where a clip arrives at roughly the size it is shown at. So the video frame goes
+  // straight to the output.
   const fit = Math.min(W / sw, H / sh);
+  const isVideo = typeof HTMLVideoElement !== "undefined" && src instanceof HTMLVideoElement;
   const fgKey = `${bedKey}:${Math.round(fit * 1000)}`;
-  if (!shot._fg || shot._fgKey !== fgKey) {
+  if (!isVideo && (!shot._fg || shot._fgKey !== fgKey)) {
     // A little over the fitted size, so the shot's own zoom never has to scale it up.
     const fw = Math.max(1, Math.round(sw * fit * 1.06));
     const fh = Math.max(1, Math.round(sh * fit * 1.06));
@@ -291,9 +303,9 @@ function drawBedded(octx, W, H, shot, src, sw, sh, scale, dx, dy, bedKey) {
       shot._fgKey = fgKey;
     }
   }
-  const from = shot._fg || src;
-  const fsw = shot._fg ? shot._fg.width : sw;
-  const fsh = shot._fg ? shot._fg.height : sh;
+  const from = isVideo ? src : (shot._fg || src);
+  const fsw = from === src ? sw : shot._fg.width;
+  const fsh = from === src ? sh : shot._fg.height;
   const dw = sw * fit * scale, dh = sh * fit * scale;
   octx.drawImage(from, 0, 0, fsw, fsh, (W - dw) / 2 + dx, (H - dh) / 2 + dy, dw, dh);
 }
@@ -306,8 +318,7 @@ function drawShot2D(octx, W, H, shot, t) {
     // A clip is generated in the format that was chosen at the time. Switch the player to another
     // one afterwards and the clip is cover-cropped like any photo, so it gets the same treatment.
     if (widthLoss(vw, vh, W / H) > FIT_WHEN_LOSS_OVER) {
-      drawBedded(octx, W, H, shot, v, vw, vh, 1, 0, 0,
-        `${W}x${H}:${Math.floor((v.currentTime || 0) * 2)}`);
+      drawBedded(octx, W, H, shot, v, vw, vh, 1, 0, 0, `${W}x${H}`);
       return;
     }
     const base = coverRect(vw, vh, W / H);
