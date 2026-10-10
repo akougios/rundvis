@@ -1858,6 +1858,47 @@ function Rundvis() {
       img.src = dataUrl;
     });
 
+  // Vercel refuses a request body over 4.5 MB before it ever reaches the function, with a 413 -
+  // and a photo travels to upload-image as base64 inside JSON, which is a third larger again
+  // than the file. resizeImageDataUrl caps the DIMENSION, and hands back the original untouched
+  // when it is already small enough, so a 2000px PNG straight off a listing site arrives at five
+  // or six megabytes and that one room fails instantly, every time, while its neighbours upload
+  // fine. Capping pixels is not capping bytes.
+  //
+  // So: always re-encoded as JPEG, and the quality walked down until it fits, falling back to
+  // fewer pixels only if quality alone cannot do it. 3 MB of base64 is about 2.25 MB of image,
+  // which leaves plenty of room under the limit for the rest of the request.
+  const UPLOAD_MAX_B64 = 3_000_000;
+  const toUploadableJpeg = (dataUrl) =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        const fit = Math.min(1, SOURCE_MAX / Math.max(w, h));
+        w = Math.max(1, Math.round(w * fit));
+        h = Math.max(1, Math.round(h * fit));
+        for (let pass = 0; pass < 5; pass++) {
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          const c = canvas.getContext("2d");
+          if (!c) { resolve(dataUrl); return; }
+          c.imageSmoothingEnabled = true;
+          c.imageSmoothingQuality = "high";
+          c.drawImage(img, 0, 0, w, h);
+          for (const q of [0.92, 0.85, 0.75, 0.62]) {
+            const out = canvas.toDataURL("image/jpeg", q);
+            if (out.length <= UPLOAD_MAX_B64) { resolve(out); return; }
+          }
+          // Quality alone did not get there - give it fewer pixels and try again.
+          w = Math.max(1, Math.round(w * 0.8));
+          h = Math.max(1, Math.round(h * 0.8));
+        }
+        resolve(dataUrl); // nothing worked; let the server say so rather than silently sending nothing
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+
   // Prepares the photos for playback. There is no model to download and no inference to wait
   // for any more - only a resize where a photo is larger than the plates will ever need - so
   // this finishes in well under a second instead of the forty it used to take.
@@ -2109,13 +2150,26 @@ function Rundvis() {
       // One photo, start to finish. Each runs independently, so a slow clip does not hold up
       // the others.
       const lavKlip = async (i) => {
+        const forUpload = await toUploadableJpeg(flythroughStills[i]);
         const up = await fetch("/api/upload-image", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ dataUrl: flythroughStills[i], filename: `rundvis-${Date.now()}-${i}.jpg` }),
+          body: JSON.stringify({ dataUrl: forUpload, filename: `rundvis-${Date.now()}-${i}.jpg` }),
         });
-        const upJson = await up.json();
-        if (!up.ok) throw new Error(upJson.error || "Kunne ikke uploade billedet.");
+        // Read as text first. A 413 is produced by Vercel BEFORE the function runs, so the body is
+        // an error page, not JSON - and parsing it threw a SyntaxError that replaced the real
+        // reason with "Unexpected token <". The status is what says what happened.
+        const upText = await up.text();
+        let upJson = null;
+        try { upJson = JSON.parse(upText); } catch (e) { upJson = null; }
+        if (!up.ok) {
+          throw new Error(
+            upJson?.error ||
+            (up.status === 413
+              ? "Billedet er for stort til at uploade."
+              : `Kunne ikke uploade billedet (HTTP ${up.status}).`)
+          );
+        }
 
         const payload = JSON.stringify({
           imageUrl: upJson.url,
@@ -2148,7 +2202,9 @@ function Rundvis() {
           created = await create.json();
           if (create.ok) break;
           if (!created.retryable || forsoeg >= 25) {
-            throw new Error(created.error || "Kunne ikke starte videoklippet.");
+            const e = new Error(created.error || "Kunne ikke starte videoklippet.");
+            e.fatal = !!created.fatal;   // out of credit, or a bad key: the rest cannot succeed
+            throw e;
           }
           const vent = created.retryAfter ? created.retryAfter * 1000 : Math.min(5000 + forsoeg * 3000, 25000);
           await new Promise((r) => setTimeout(r, vent));
@@ -2175,6 +2231,7 @@ function Rundvis() {
       // queue as it finishes.
       const koe = indexes.slice();
       const fejl = [];
+      let stoppet = false;
       const arbejder = async () => {
         while (koe.length) {
           const i = koe.shift();
@@ -2191,6 +2248,14 @@ function Rundvis() {
             // succeeded - those are already paid for.
             fejl.push(`Billede ${i + 1}: ${err.message}`);
             setHqRoom((prev) => ({ ...prev, [i]: "fejl" }));
+            // Said NOW, not when the run finishes. A bar turning amber on its own is a colour
+            // nobody can read: the first report of this was "en af dem loade bare brun", with no
+            // way to know what had happened or whether to wait.
+            setHqError((prev) => prev || `Rum ${i + 1}: ${err.message}`);
+            // An empty balance will not fill itself between rooms. Emptying the queue stops
+            // fifteen doomed calls from being made one after another, each with a photograph
+            // attached, and gets the real message on screen now instead of a minute from now.
+            if (err && err.fatal) { koe.length = 0; stoppet = true; }
           }
           done++;
           setHqProgress({ current: done, total: indexes.length, phase: "generate" });
@@ -2203,9 +2268,12 @@ function Rundvis() {
         // way that is one line, and when they fail differently that difference is the clue.
         const unikke = [...new Set(fejl.map((f) => f.replace(/^Billede \d+: /, "")))];
         setHqError(
-          `${fejl.length} af ${indexes.length} klip fejlede. ` +
+          (stoppet
+            ? `Stoppet efter ${fejl.length} af ${indexes.length} rum. `
+            : `${fejl.length} af ${indexes.length} klip fejlede. `) +
           unikke.slice(0, 2).join(" — ") +
-          (unikke.length > 2 ? ` (+${unikke.length - 2} andre årsager)` : "")
+          (unikke.length > 2 ? ` (+${unikke.length - 2} andre årsager)` : "") +
+          (stoppet ? " De resterende rum blev ikke forsøgt." : "")
         );
         setHqStatus(clips.some(Boolean) ? "done" : "error");
       } else {

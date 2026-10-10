@@ -4,9 +4,10 @@
 
 import { put } from "@vercel/blob";
 
-export const config = {
-  api: { bodyParser: { sizeLimit: "12mb" } },
-};
+// No bodyParser config here. The 12mb sizeLimit that used to sit in this spot was Next.js
+// syntax in a project that is not Next.js, so it did nothing - and could not have worked anyway:
+// Vercel caps a function's request body at 4.5 MB and enforces it before the function is reached.
+// The client keeps the photo well under that; see toUploadableJpeg.
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {

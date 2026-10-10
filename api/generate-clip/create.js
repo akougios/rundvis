@@ -72,10 +72,22 @@ export default async function handler(req, res) {
         ? (text.slice(0, 300) || explainStatus(r.status))
         : (typeof raw === "string" ? raw : JSON.stringify(raw).slice(0, 300));
       const after = Number(r.headers.get("retry-after"));
+      // ACCOUNT STATE SPEAKS DANISH FIRST. For an empty credit balance or a rejected key, the
+      // person reading the screen has to DO something, and the thing to do is not in Luma's
+      // English one-liner. "Not enough credits to continue" went to the screen exactly like that,
+      // because our own wording was only used when the body was empty. Luma's text is kept in
+      // brackets - it is still the authority on what happened.
+      const accountState = r.status === 402 || r.status === 401 || r.status === 403;
+      const message = accountState
+        ? `Luma: ${explainStatus(r.status)}${detail ? ` (${detail})` : ""}`
+        : `Luma afviste kaldet (HTTP ${r.status}): ${detail}`;
       res.status(r.status).json({
-        error: `Luma afviste kaldet (HTTP ${r.status}): ${detail}`,
+        error: message,
         // The page waits this one out rather than reporting it: see the comment on the retry loop.
         retryable: r.status === 429,
+        // No amount of waiting buys credit or fixes a key, and every remaining room would fail
+        // the same way. The page stops the run rather than spending the queue on it.
+        fatal: accountState,
         retryAfter: Number.isFinite(after) && after > 0 ? after : null,
       });
       return;
