@@ -519,11 +519,22 @@ function paceBeats(i, count) {
 // footage parks on a frozen frame.
 const CLIP_BONUS_BEATS = 2.5;
 const CLIP_MAX_BEATS = 9;
-// A clip is only worth showing if it moves for most of what the shot wants to hold. Below this
-// the free 2D move is the better picture: it moves for the whole shot, every time. Holding the
-// arc and dropping the clip beats shrinking the shot to fit a clip that stops early - which would
-// turn a four-second establishing shot into a one-second flicker.
-const CLIP_MIN_COVERAGE = 0.6;
+// The floor under a shot carrying a clip: below four beats (2.07s) a shot is a flicker, and the
+// free 2D move - which moves for the whole shot, every time - is the better picture.
+//
+// This used to be a FRACTION of what the shot wanted to hold (0.6), and that made the bar scale
+// with the shot. The establishing and closing shots are the longest in the film at 9 beats, so
+// they demanded 5.4 beats - 2.79s - of measured motion where a 4.5-beat middle shot demanded
+// 2.7. Swept across the range of motion Ray 3.2 actually returns (0.6s to 5s), the first and last
+// shots kept their clip 49% of the time against 78-84% for the middle ones. Half of all films
+// opened AND closed on the free version, and nothing in the product explained why. The two shots
+// an agent remembers were the two least likely to be the thing they paid for.
+//
+// An absolute floor instead. A clip that moves for 2.07s now carries a shot wherever it sits, and
+// a shot whose clip stops early is SHORTENED to the moving part rather than held at its full
+// length on a 2D move. Shorter and real beats longer and fake: that is what a videographer does
+// with a take that runs out.
+const CLIP_MIN_BEATS = 4;
 
 // clipMotion(i) -> { start, moving } in seconds, from measureClipMotion, or null when the shot has
 // no clip or it has not been measured yet. Unmeasured is treated as no clip: the shot keeps its
@@ -635,11 +646,14 @@ function buildEditPlan(count, clipMotion) {
     // shot's duration into NaN, and one NaN duration takes down the whole timeline.
     if (m && isFinite(m.moving) && isFinite(m.start)) {
       const movingBeats = Math.floor(((m.moving * 1000) / BEAT_MS) * 2) / 2;
-      if (movingBeats < nBeats * CLIP_MIN_COVERAGE) {
-        // The clip stops too early to carry this shot. Keep the arc, show the 2D move instead.
+      if (movingBeats < CLIP_MIN_BEATS) {
+        // Barely moves at all. Keep the arc, show the 2D move instead.
         useClip = false;
       } else {
         clipStart = m.start;
+        // min() with movingBeats is what shortens the shot to the moving part: a 9-beat
+        // establishing shot whose clip runs out at 5 beats becomes a 5-beat shot that moves all
+        // the way through, instead of a 9-beat shot that does not move at all.
         nBeats = Math.min(nBeats + CLIP_BONUS_BEATS, CLIP_MAX_BEATS, movingBeats);
       }
     }
