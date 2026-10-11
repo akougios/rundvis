@@ -28,9 +28,14 @@ const CONCEPTS = {
 // model warps something at 720p it will warp it at 1080p too.
 export const QUALITIES = {
   test: { resolution: "720p", usdPerClip: 0.45, label: "Test" },
-  // 1.20 is measured, not quoted: 9 clips at full quality billed 10.80 $. The 0.95 that stood
-  // here was an estimate, and it was 26% light. 0.45 for test quality is still only bracketed by
-  // a 6-clip run that came to 2-3 $, so treat it as approximate until a bill confirms it.
+  // TWO MEASUREMENTS THAT DISAGREE, and the pricing of the whole product rests on which is right.
+  //   9 clips at full quality billed 10.80 $  -> 1.20 per clip
+  //   4 clips billed about 3.40 $             -> 0.85 per clip
+  // Both come off real invoices. 1.20 is kept because it is the pessimistic one and the one taken
+  // from the larger run, but it may be 40% too high. The 4-clip run is also close to what a MIX
+  // would cost (2 final + 2 test is 3.30 $), so it may not have been four full-quality clips at
+  // all. Luma's dashboard shows the charge per generation; one look at it settles this, and until
+  // someone takes that look neither number should be used to set a price.
   final: { resolution: "1080p", usdPerClip: 1.20, label: "Fuld kvalitet" },
 };
 
