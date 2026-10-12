@@ -240,6 +240,7 @@ loft; værste overskridelse er 0,0000 px.
 | `SUPABASE_URL` | Konti og login. Uden den er der intet login, og den delte adgangskode bruges i stedet. |
 | `SUPABASE_ANON_KEY` | Offentlig. Ligger i browseren, begrænset af row level security. |
 | `SUPABASE_SERVICE_KEY` | **Kun server.** Går uden om row level security. Må aldrig i browseren eller i git. |
+| `GOOGLE_LOGIN` | Sæt til `1` når Google-provideren faktisk er slået til i Supabase. Uden den vises Google-knappen ikke — Supabase fortæller ikke udefra hvilke providere der er aktive, og en knap der fejler med "provider is not enabled" er værre end ingen knap. |
 | `STRIPE_SECRET_KEY` | Abonnement. Så længe den ikke er sat, kræves login men ikke abonnement. |
 | `STRIPE_PUBLISHABLE_KEY` | Offentlig. Frontenden bruger den til at vise at betaling er åben. |
 | `STRIPE_WEBHOOK_SECRET` | Signaturen på Stripes kald. Uden den afvises alle webhooks. |

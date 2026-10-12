@@ -13,6 +13,10 @@ export default function handler(req, res) {
     stripeNoegle: process.env.STRIPE_PUBLISHABLE_KEY || "",
     // Så frontenden kan vise den rigtige tilstand frem for at gætte.
     loginAktivt: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY),
+    // Supabase fortæller ikke udefra hvilke providere der er slået til, så den må siges her.
+    // Uden det stod der en Google-knap der fejlede med "provider is not enabled" — en synligt
+    // ødelagt login-knap på et produkt man sælger er værre end ingen Google-knap.
+    googleAktivt: process.env.GOOGLE_LOGIN === "1",
     betalingAktivt: Boolean(process.env.STRIPE_PUBLISHABLE_KEY),
   });
 }

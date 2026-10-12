@@ -1580,6 +1580,7 @@ function Rundvis() {
   // fjerne det igen er et glimt der får siden til at se ustabil ud.
   const [opsaetningLoadet, setOpsaetningLoadet] = useState(false);
   const [loginMuligt, setLoginMuligt] = useState(false);
+  const [googleMuligt, setGoogleMuligt] = useState(false);
   const [menuAaben, setMenuAaben] = useState(false);
   const [profil, setProfil] = useState(null);     // alt menuen viser, i ét kald
   const [profilHenter, setProfilHenter] = useState(false);
@@ -1640,6 +1641,7 @@ function Rundvis() {
       const cfg = await hentOpsaetning();
       if (vaek) return;
       setLoginMuligt(Boolean(cfg.loginAktivt));
+      setGoogleMuligt(Boolean(cfg.googleAktivt));
       setOpsaetningLoadet(true);
       if (!cfg.loginAktivt) return;
       const k = await hentKlient().catch(() => null);
@@ -3413,6 +3415,7 @@ function Rundvis() {
                   Du kan lave videoer uden konto. Opgraderingen kræver én.
                 </p>
 
+                {googleMuligt && (<>
                 <button
                   onClick={logIndMedGoogle} disabled={portSender}
                   className="w-full rounded-full mb-3 flex items-center justify-center gap-2"
@@ -3433,6 +3436,7 @@ function Rundvis() {
                   <span className="text-[11px]" style={{ color: MUTED }}>eller</span>
                   <div style={{ height: 1, flex: 1, backgroundColor: LINE }} />
                 </div>
+                </>)}
 
                 <input
                   type="email" autoFocus placeholder="E-mail" value={email}
