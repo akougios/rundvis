@@ -13,7 +13,12 @@
 // instead of sitting in every request where a screenshot or a shared HAR file would carry it.
 // The token expires on its own, so a leaked one stops working.
 
-const TOKEN_HOURS = 12;
+// Thirty days, not twelve hours. The two of us are the only users, we test daily, and being
+// asked for the code twice a day is the kind of friction that ends with the gate turned off
+// altogether - which is the outcome this exists to prevent. The trade is that a leaked token
+// stays good for a month; at this stage, with no customer data behind it, that is the right way
+// round. Shorten it the day real accounts arrive.
+const TOKEN_HOURS = 24 * 30;
 
 function accessSecret() {
   // Signed with its own secret where one is set, otherwise with the key that already guards the
