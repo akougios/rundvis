@@ -1,4 +1,4 @@
-import { allowedToSpend } from "./_access.js";
+import { maaBruge } from "./_konto.js";
 // Serverless function (Vercel) — holds the Anthropic API key server-side.
 // The browser never sees ANTHROPIC_API_KEY; it only calls this endpoint.
 
@@ -9,7 +9,8 @@ export default async function handler(req, res) {
   }
 
   // Nothing below here is free. See api/_access.js.
-  if (!(await allowedToSpend(req, res))) return;
+  const adgang = await maaBruge(req, res);
+  if (!adgang) return;
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {

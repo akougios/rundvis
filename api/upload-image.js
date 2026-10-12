@@ -3,7 +3,7 @@
 // reachable image URLs; it cannot accept raw uploads or data: URIs.
 
 import { put } from "@vercel/blob";
-import { allowedToSpend } from "./_access.js";
+import { maaBruge } from "./_konto.js";
 
 // No bodyParser config here. The 12mb sizeLimit that used to sit in this spot was Next.js
 // syntax in a project that is not Next.js, so it did nothing - and could not have worked anyway:
@@ -17,7 +17,8 @@ export default async function handler(req, res) {
   }
 
   // Nothing below here is free. See api/_access.js.
-  if (!(await allowedToSpend(req, res))) return;
+  const adgang = await maaBruge(req, res);
+  if (!adgang) return;
 
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     res.status(500).json({

@@ -1,4 +1,4 @@
-import { allowedToSpend } from "./_access.js";
+import { maaBruge } from "./_konto.js";
 // Serverless function (Vercel) — calls ElevenLabs text-to-speech.
 // The browser never sees ELEVENLABS_API_KEY; it only calls this endpoint
 // and gets back an mp3 audio stream.
@@ -15,7 +15,8 @@ export default async function handler(req, res) {
   }
 
   // Nothing below here is free. See api/_access.js.
-  if (!(await allowedToSpend(req, res))) return;
+  const adgang = await maaBruge(req, res);
+  if (!adgang) return;
 
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
