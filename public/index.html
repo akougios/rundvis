@@ -38,6 +38,42 @@
 <script type="text/babel" data-presets="react">
 const { useState, useRef, useEffect, useCallback, useMemo } = React;
 
+// ADGANG — the shared code, until real accounts land. See api/_access.js for why.
+//
+// Every call that costs money carries the token this holds. Kept in localStorage so a reload
+// does not ask again, and dropped the moment the server says it has expired - the token carries
+// its own expiry in the clear, so the page can check before it even asks.
+const ACCESS_KEY = "rundvis.adgang";
+
+function gemtAdgang() {
+  try {
+    const t = localStorage.getItem(ACCESS_KEY);
+    if (!t) return "";
+    const udloeber = Number(String(t).split(".")[0]);
+    if (!Number.isFinite(udloeber) || udloeber < Date.now()) { localStorage.removeItem(ACCESS_KEY); return ""; }
+    return t;
+  } catch (e) { return ""; }  // private window, blocked storage: ask for the code instead
+}
+
+function gemAdgang(token) {
+  try { if (token) localStorage.setItem(ACCESS_KEY, token); else localStorage.removeItem(ACCESS_KEY); } catch (e) {}
+}
+
+// Wraps fetch so no paid call can be written without the header by accident - the one thing that
+// would quietly reopen the hole this closes.
+async function kaldMedAdgang(url, init, onAfvist) {
+  const token = gemtAdgang();
+  const headers = Object.assign({}, (init && init.headers) || {});
+  if (token) headers["x-rundvis-access"] = token;
+  const r = await fetch(url, Object.assign({}, init, { headers }));
+  if (r.status === 401) {
+    gemAdgang("");
+    if (onAfvist) onAfvist();
+    throw new Error("Adgangen er udløbet. Indtast koden igen.");
+  }
+  return r;
+}
+
 // The page is paper, ink and one hairline; the property photographs supply all the colour. That
 // is the whole idea, and it is why there is no brand hue washing over anything: on a page selling
 // a house, any colour of ours competes with the rooms.
@@ -1467,6 +1503,35 @@ function Rundvis() {
   // generated clips. Kept after the model comparison was settled, because being able to put the
   // two side by side is what makes the upgrade worth paying for.
   const [showSource, setShowSource] = useState("upgraded");
+  // The access code, asked for only when a paid action is refused. The free version stays open to
+  // everyone, which is both the honest product and one less thing between an agent and the demo.
+  const [adgangKraevet, setAdgangKraevet] = useState(false);
+  const [adgangKode, setAdgangKode] = useState("");
+  const [adgangFejl, setAdgangFejl] = useState("");
+  const [adgangSender, setAdgangSender] = useState(false);
+  const kraevAdgang = useCallback(() => setAdgangKraevet(true), []);
+
+  const indloesAdgang = async () => {
+    if (adgangSender) return;
+    setAdgangSender(true);
+    setAdgangFejl("");
+    try {
+      const r = await fetch("/api/access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: adgangKode }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || "Koden blev ikke godkendt.");
+      gemAdgang(j.token || "");
+      setAdgangKraevet(false);
+      setAdgangKode("");
+    } catch (err) {
+      setAdgangFejl(err.message || "Koden blev ikke godkendt.");
+    } finally {
+      setAdgangSender(false);
+    }
+  };
   // Ticks while generating, only so the bar can advance on elapsed time. A clip takes about three
   // minutes, so a bar that moves only when one finishes stands perfectly still for minutes and
   // then jumps, which reads as broken rather than as patient.
@@ -1661,11 +1726,11 @@ function Rundvis() {
     setGenerating(true); setGenError("");
     try {
       const typeLabel = PROPERTY_TYPES.find((t) => t.id === propertyType)?.label || "bolig";
-      const response = await fetch("/api/generate-script", {
+      const response = await kaldMedAdgang("/api/generate-script", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ propertyTypeLabel: typeLabel, address, agentName, notes, sceneCount: images.length }),
-      });
+      }, kraevAdgang);
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Ukendt fejl fra serveren.");
       const lines = data.lines || [];
@@ -1682,11 +1747,11 @@ function Rundvis() {
   // ---- Voice generation (ElevenLabs, with per-scene browser-TTS fallback) ----
   const generateVoiceForIndex = async (idx, text) => {
     try {
-      const res = await fetch("/api/generate-voice", {
+      const res = await kaldMedAdgang("/api/generate-voice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
-      });
+      }, kraevAdgang);
       if (!res.ok) throw new Error("voice-api-failed");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -2176,11 +2241,11 @@ function Rundvis() {
       // the others.
       const lavKlip = async (i) => {
         const forUpload = await toUploadableJpeg(flythroughStills[i]);
-        const up = await fetch("/api/upload-image", {
+        const up = await kaldMedAdgang("/api/upload-image", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ dataUrl: forUpload, filename: `rundvis-${Date.now()}-${i}.jpg` }),
-        });
+        }, kraevAdgang);
         // Read as text first. A 413 is produced by Vercel BEFORE the function runs, so the body is
         // an error page, not JSON - and parsing it threw a SyntaxError that replaced the real
         // reason with "Unexpected token <". The status is what says what happened.
@@ -2219,11 +2284,11 @@ function Rundvis() {
         // time would have been.
         let created;
         for (let forsoeg = 0; ; forsoeg++) {
-          const create = await fetch("/api/generate-clip/create", {
+          const create = await kaldMedAdgang("/api/generate-clip/create", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: payload,
-          });
+          }, kraevAdgang);
           created = await create.json();
           if (create.ok) break;
           if (!created.retryable || forsoeg >= 25) {
@@ -2964,6 +3029,53 @@ function Rundvis() {
           </section>
         )}
       </main>
+
+      {/* Asked for only when a paid call is refused - the free version never sees this. One
+          shared code for the whole product, which is the right size for a demo to named agents
+          and goes away when real accounts land. */}
+      {adgangKraevet && (
+        <div
+          className="fixed inset-0 flex items-center justify-center px-5"
+          style={{ backgroundColor: "rgba(23,27,26,0.45)", zIndex: 50 }}
+          onClick={() => setAdgangKraevet(false)}
+        >
+          <div
+            className="w-full rounded-2xl p-6"
+            style={{ maxWidth: 380, backgroundColor: SURFACE, boxShadow: "0 24px 60px rgba(0,0,0,0.25)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-sm mb-1" style={{ color: TEXT }}>Adgangskode</p>
+            <p className="text-[11px] mb-4" style={{ color: MUTED }}>
+              Gratis-versionen er åben. Opgraderingen kræver en kode.
+            </p>
+            <input
+              type="password"
+              autoFocus
+              value={adgangKode}
+              onChange={(e) => setAdgangKode(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") indloesAdgang(); }}
+              className="w-full rounded-xl px-3 py-2.5 text-sm mb-3"
+              style={{ border: `1px solid ${LINE}`, backgroundColor: INK, color: TEXT }}
+            />
+            {adgangFejl && <p className="text-xs mb-3" style={{ color: AMBER }}>{adgangFejl}</p>}
+            <button
+              onClick={indloesAdgang}
+              disabled={adgangSender || !adgangKode}
+              className="w-full rounded-full"
+              style={{
+                backgroundColor: ACCENT,
+                color: "#fff",
+                padding: "11px 0",
+                fontSize: 14,
+                opacity: adgangSender || !adgangKode ? 0.5 : 1,
+                cursor: adgangSender || !adgangKode ? "not-allowed" : "pointer",
+              }}
+            >
+              {adgangSender ? "Tjekker…" : "Lås op"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

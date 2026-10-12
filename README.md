@@ -235,6 +235,8 @@ loft; værste overskridelse er 0,0000 px.
 | `LUMA_API_KEY` | Videogenerering. Uden den virker storyboardet stadig; kun opgraderingen fejler, med en forklarende besked. |
 | `BLOB_READ_WRITE_TOKEN` | Vercel Blob. Videomodellen kræver et offentligt tilgængeligt billede-URL. Sættes automatisk når en Blob Store oprettes under Vercel → Storage og forbindes til projektet. |
 | `VIDEO_PROXY_SECRET` | Valgfri. Nøgle til at signere video-URL'er. Falder tilbage til `LUMA_API_KEY` hvis den ikke er sat. |
+| `ACCESS_CODE` | **Adgangskoden til opgraderingen.** Uden den er alle betalte endpoints åbne for enhver der kender adressen. Gratis-versionen er åben uanset. |
+| `ACCESS_TOKEN_SECRET` | Valgfri. Nøgle til at signere adgangstokens. Falder tilbage til `VIDEO_PROXY_SECRET`, derefter `LUMA_API_KEY`. |
 
 ### Én model, ikke et modelvalg
 

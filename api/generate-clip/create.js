@@ -1,12 +1,16 @@
 // Serverless function (Vercel) — starts one clip for one room photo.
 
 import { LUMA_BASE, buildRequest, lumaKeyOrRespond, explainStatus } from "../_luma.js";
+import { allowedToSpend } from "../_access.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Kun POST er tilladt." });
     return;
   }
+
+  // Nothing below here is free. See api/_access.js.
+  if (!(await allowedToSpend(req, res))) return;
 
   const key = lumaKeyOrRespond(res);
   if (!key) return;
