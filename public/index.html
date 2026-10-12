@@ -1576,6 +1576,10 @@ function Rundvis() {
   const [portBesked, setPortBesked] = useState("");
   const [portSender, setPortSender] = useState(false);
   const [bruger, setBruger] = useState(null);
+  // Indtil /api/config har svaret ved vi ikke om login findes. At vise "Log ind" imens og så
+  // fjerne det igen er et glimt der får siden til at se ustabil ud.
+  const [opsaetningLoadet, setOpsaetningLoadet] = useState(false);
+  const [loginMuligt, setLoginMuligt] = useState(false);
   const [adgangKode, setAdgangKode] = useState("");
   const kraevAdgang = useCallback((grund) => { setPortFejl(""); setPortBesked(""); setPort(grund || "kode"); }, []);
 
@@ -1585,7 +1589,10 @@ function Rundvis() {
     let vaek = false;
     (async () => {
       const cfg = await hentOpsaetning();
-      if (vaek || !cfg.loginAktivt) return;
+      if (vaek) return;
+      setLoginMuligt(Boolean(cfg.loginAktivt));
+      setOpsaetningLoadet(true);
+      if (!cfg.loginAktivt) return;
       const k = await hentKlient().catch(() => null);
       if (vaek || !k) return;
       const { data } = await k.auth.getSession();
@@ -2550,15 +2557,28 @@ function Rundvis() {
       <header className="px-5 pt-8 pb-6">
         <div className="max-w-3xl mx-auto flex items-baseline justify-between">
           <span className="font-display" style={{ fontSize: 30, letterSpacing: "-0.02em" }}>Rundvis</span>
-          {/* Kun når nogen ER logget ind. En tom plads hvor der kunne stå "log ind" ville invitere
-              gratis-brugeren til at tro at han skal, og det skal han ikke. */}
-          {bruger ? (
-            <span className="flex items-baseline gap-3">
-              <span className="text-xs hidden sm:block" style={{ color: MUTED }}>{bruger.email}</span>
-              <button onClick={logUd} className="text-xs" style={{ color: MUTED }}>Log ud</button>
-            </span>
-          ) : (
-            <span className="text-xs hidden sm:block" style={{ color: MUTED }}></span>
+          {/* TILSTANDEN, IKKE EN OPFORDRING.
+              Grå tekst uden knapramme, yderst til højre. Et tilbud, ikke en mur: en mur er en
+              login-skærm ved ankomst eller en stor "opret konto"-knap der antyder at man skal.
+              Men den skal VÆRE der, og grunden er ikke pynt: en mægler med en udløbet session
+              kan ellers først se det efter at have lagt tolv billeder ind og trykket Opgradér,
+              hvilket er det værst tænkelige tidspunkt. Her kan han se det før arbejdet.
+              Når abonnement og forbrug kommer, er det her de hører hjemme. */}
+          {opsaetningLoadet && (
+            bruger ? (
+              <span className="flex items-baseline gap-3">
+                <span className="text-xs hidden sm:block" style={{ color: MUTED }}>{bruger.email}</span>
+                <button onClick={logUd} className="text-xs" style={{ color: MUTED }}>Log ud</button>
+              </span>
+            ) : loginMuligt ? (
+              <button
+                onClick={() => kraevAdgang("login")}
+                className="text-xs"
+                style={{ color: MUTED }}
+              >
+                Log ind
+              </button>
+            ) : null
           )}
         </div>
       </header>
