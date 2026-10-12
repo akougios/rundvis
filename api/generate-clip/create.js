@@ -1,7 +1,7 @@
 // Serverless function (Vercel) — starts one clip for one room photo.
 
 import { LUMA_BASE, buildRequest, lumaKeyOrRespond, explainStatus } from "../_luma.js";
-import { maaBruge } from "../_konto.js";
+import { maaBruge, skrivForbrug } from "../_konto.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -98,6 +98,18 @@ export default async function handler(req, res) {
       return;
     }
 
+    // Én linje per klip. Også når det fejler — se skrivForbrug. Her er vi nået igennem, så
+    // det er et klip der bliver faktureret.
+    if (adgang.konto) {
+      await skrivForbrug({
+        konto_id: adgang.konto.id,
+        bolig_id: (req.body && req.body.boligId) || null,
+        bruger_id: adgang.bruger ? adgang.bruger.id : null,
+        model: "luma-ray-3.2",
+        kvalitet: (req.body && req.body.quality) || null,
+        resultat: "ok",
+      });
+    }
     res.status(200).json({ id: data.id });
   } catch (err) {
     res.status(500).json({ error: `Kunne ikke starte klippet: ${err.message}` });

@@ -237,6 +237,13 @@ loft; værste overskridelse er 0,0000 px.
 | `VIDEO_PROXY_SECRET` | Valgfri. Nøgle til at signere video-URL'er. Falder tilbage til `LUMA_API_KEY` hvis den ikke er sat. |
 | `ACCESS_CODE` | **Adgangskoden til opgraderingen.** Uden den er alle betalte endpoints åbne for enhver der kender adressen. Gratis-versionen er åben uanset. |
 | `ACCESS_TOKEN_SECRET` | Valgfri. Nøgle til at signere adgangstokens. Falder tilbage til `VIDEO_PROXY_SECRET`, derefter `LUMA_API_KEY`. |
+| `SUPABASE_URL` | Konti og login. Uden den er der intet login, og den delte adgangskode bruges i stedet. |
+| `SUPABASE_ANON_KEY` | Offentlig. Ligger i browseren, begrænset af row level security. |
+| `SUPABASE_SERVICE_KEY` | **Kun server.** Går uden om row level security. Må aldrig i browseren eller i git. |
+| `STRIPE_SECRET_KEY` | Abonnement. Så længe den ikke er sat, kræves login men ikke abonnement. |
+| `STRIPE_PUBLISHABLE_KEY` | Offentlig. Frontenden bruger den til at vise at betaling er åben. |
+| `STRIPE_WEBHOOK_SECRET` | Signaturen på Stripes kald. Uden den afvises alle webhooks. |
+| `STRIPE_PRICE_KONTOR`, `STRIPE_PRICE_KAEDE` | Valgfri. Pris-id fra Stripe. Uden dem sendes prisen med i kaldet, så der ikke skal oprettes noget i Stripe først. |
 
 ### Én model, ikke et modelvalg
 

@@ -1580,6 +1580,55 @@ function Rundvis() {
   // fjerne det igen er et glimt der får siden til at se ustabil ud.
   const [opsaetningLoadet, setOpsaetningLoadet] = useState(false);
   const [loginMuligt, setLoginMuligt] = useState(false);
+  const [menuAaben, setMenuAaben] = useState(false);
+  const [profil, setProfil] = useState(null);     // alt menuen viser, i ét kald
+  const [profilHenter, setProfilHenter] = useState(false);
+  // Én bolig per opgraderingskørsel. Det er enheden kunden betaler for, så den skal følge med
+  // hvert klip — ellers kan forbruget ikke tælles på boliger, kun på klip.
+  const boligIdRef = useRef(null);
+
+  const hentProfil = useCallback(async () => {
+    setProfilHenter(true);
+    try {
+      const h = {};
+      if (session && session.access_token) h.Authorization = `Bearer ${session.access_token}`;
+      const r = await fetch("/api/konto", { headers: h });
+      setProfil(r.ok ? await r.json() : null);
+    } catch (e) { setProfil(null); }
+    finally { setProfilHenter(false); }
+  }, [bruger]);
+
+  // Hentes når menuen åbnes, ikke ved sideindlæsning: en gratis bruger skal ikke betale for et
+  // kald til en menu han aldrig åbner.
+  useEffect(() => { if (menuAaben) hentProfil(); }, [menuAaben, hentProfil]);
+
+  // Kommer man tilbage fra Stripe, er status lige skiftet. Uden det her ville menuen vise det
+  // gamle indtil næste genindlæsning, og det ligner at betalingen ikke gik igennem.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!new URLSearchParams(window.location.search).has("betaling")) return;
+    setMenuAaben(true);
+    const t = setTimeout(hentProfil, 1500);   // webhooken skal nå frem først
+    window.history.replaceState({}, "", window.location.pathname);
+    return () => clearTimeout(t);
+  }, [hentProfil]);
+
+  const tegnAbonnement = (plan) => medPortFejl(async () => {
+    const r = await kaldMedAdgang("/api/billing/checkout", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan }),
+    }, kraevAdgang);
+    const j = await r.json();
+    if (!r.ok || !j.url) throw new Error(j.error || "Kunne ikke starte betalingen.");
+    window.location.href = j.url;
+  });
+
+  const aabnKundeportal = () => medPortFejl(async () => {
+    const r = await kaldMedAdgang("/api/billing/portal", { method: "POST" }, kraevAdgang);
+    const j = await r.json();
+    if (!r.ok || !j.url) throw new Error(j.error || "Kunne ikke åbne kundeportalen.");
+    window.location.href = j.url;
+  });
   const [adgangKode, setAdgangKode] = useState("");
   const kraevAdgang = useCallback((grund) => { setPortFejl(""); setPortBesked(""); setPort(grund || "kode"); }, []);
 
@@ -2347,6 +2396,11 @@ function Rundvis() {
     const indexes = (onlyIndexes || flythroughStills.map((_, i) => i)).filter((i) => !clips[i]);
     if (indexes.length === 0) return;
 
+    // Én bolig per kørsel. Uden den tæller forbruget klip, og en villa med atten rum ville
+    // tælle som atten boliger på en plan der er solgt per bolig.
+    boligIdRef.current = (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID()
+      : `b-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setHqStatus("working");
     setHqError("");
     setExportStatus("idle");
@@ -2396,6 +2450,7 @@ function Rundvis() {
           // identical rather than merely similar.
           seed: 1000 + i,
           quality: hqQuality,
+          boligId: boligIdRef.current,
         });
 
         // Submitting six at once will hit the account's limit, and being told "too many" is not a
@@ -2566,16 +2621,11 @@ function Rundvis() {
               Når abonnement og forbrug kommer, er det her de hører hjemme. */}
           {opsaetningLoadet && (
             bruger ? (
-              <span className="flex items-baseline gap-3">
-                <span className="text-xs hidden sm:block" style={{ color: MUTED }}>{bruger.email}</span>
-                <button onClick={logUd} className="text-xs" style={{ color: MUTED }}>Log ud</button>
-              </span>
+              <button onClick={() => setMenuAaben(true)} className="text-xs" style={{ color: MUTED }}>
+                {bruger.email}
+              </button>
             ) : loginMuligt ? (
-              <button
-                onClick={() => kraevAdgang("login")}
-                className="text-xs"
-                style={{ color: MUTED }}
-              >
+              <button onClick={() => kraevAdgang("login")} className="text-xs" style={{ color: MUTED }}>
                 Log ind
               </button>
             ) : null
@@ -3172,6 +3222,138 @@ function Rundvis() {
           </section>
         )}
       </main>
+
+      {/* PROFILEN. Skuffe fra højre frem for en lille menu: der skal stå forbrug, plan og
+          valgmuligheder, og det er mere end en dropdown kan bære uden at blive et rod. */}
+      {menuAaben && (
+        <div
+          style={{
+            position: "fixed", inset: 0, display: "flex", justifyContent: "flex-end",
+            backgroundColor: "rgba(23,27,26,0.35)", zIndex: 45,
+          }}
+          onClick={() => setMenuAaben(false)}
+        >
+          {/* Placeringen står i style, ikke i klasser. En skuffe der SKAL ligge i højre side
+              bør ikke afhænge af at et bestemt hjælpeklassenavn er med i den css der tilfældigvis
+              er indlæst - den fejl lå i venstre side og bestod alligevel enhver tekstprøve. */}
+          <div
+            style={{
+              height: "100%", width: "100%", maxWidth: 420, overflowY: "auto",
+              backgroundColor: SURFACE, boxShadow: "-24px 0 60px rgba(0,0,0,0.18)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ padding: "28px 24px 24px" }}>
+              <div className="flex items-start justify-between mb-7">
+                <div>
+                  <p className="text-sm" style={{ color: TEXT }}>{bruger ? bruger.email : "Din konto"}</p>
+                  {profil && profil.konto && (
+                    <p className="text-[11px] mt-0.5" style={{ color: MUTED }}>{profil.konto.navn}</p>
+                  )}
+                </div>
+                <button onClick={() => setMenuAaben(false)} className="text-xs" style={{ color: MUTED }}>Luk</button>
+              </div>
+
+              {profilHenter && !profil && <p className="text-xs" style={{ color: MUTED }}>Henter…</p>}
+
+              {/* NUVÆRENDE PLAN OG FORBRUG. Tallet står før planerne, fordi det er dét en
+                  kunde der allerede betaler kom for at se. */}
+              {profil && profil.konto && profil.konto.status === "aktiv" && (
+                <div className="mb-8">
+                  <p className="text-[11px] mb-2" style={{ color: MUTED }}>Denne periode</p>
+                  <p className="font-display mb-2" style={{ fontSize: 26, color: TEXT }}>
+                    {profil.konto.brugt} af {profil.konto.inkluderede} boliger
+                  </p>
+                  <div className="w-full overflow-hidden mb-4" style={{ height: 4, backgroundColor: LINE, borderRadius: 2 }}>
+                    <div style={{
+                      width: `${Math.min(100, Math.round(100 * profil.konto.brugt / Math.max(1, profil.konto.inkluderede)))}%`,
+                      height: "100%",
+                      backgroundColor: profil.konto.brugt >= profil.konto.inkluderede ? AMBER : ACCENT,
+                    }} />
+                  </div>
+                  {profil.konto.periodeSlut && (
+                    <p className="text-[11px] mb-4" style={{ color: MUTED }}>
+                      Fornyes {new Date(profil.konto.periodeSlut).toLocaleDateString("da-DK", { day: "numeric", month: "long" })}
+                    </p>
+                  )}
+                  {profil.konto.harKunde && (
+                    <button
+                      onClick={aabnKundeportal} disabled={portSender}
+                      className="w-full rounded-full"
+                      style={{ border: `1px solid ${LINE}`, color: TEXT, padding: "10px 0", fontSize: 13,
+                               opacity: portSender ? 0.5 : 1 }}
+                    >
+                      {portSender ? "Åbner…" : "Skift plan, kort eller opsig"}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {profil && profil.konto && profil.konto.status === "forfalden" && (
+                <div className="mb-8">
+                  <p className="text-sm mb-1" style={{ color: AMBER }}>Betalingen gik ikke igennem</p>
+                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>
+                    Opgraderingen er sat på pause indtil kortet er opdateret.
+                  </p>
+                  <button onClick={aabnKundeportal} disabled={portSender}
+                    className="w-full rounded-full"
+                    style={{ backgroundColor: ACCENT, color: "#fff", padding: "10px 0", fontSize: 13 }}>
+                    Opdatér betaling
+                  </button>
+                </div>
+              )}
+
+              {/* PLANERNE. Vises også uden login og uden Stripe, fordi "hvad koster det" er en
+                  del af produktet — ikke noget der først findes når alt er koblet på. */}
+              {(!profil || !profil.konto || profil.konto.status !== "aktiv") && (
+                <>
+                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>Vælg abonnement</p>
+                  <div className="flex flex-col gap-3 mb-6">
+                    {(profil && profil.planer ? profil.planer : []).map((plan) => (
+                      <div key={plan.noegle} className="rounded-2xl p-5" style={{ border: `1px solid ${LINE}` }}>
+                        <div className="flex items-baseline justify-between mb-1">
+                          <span className="text-sm" style={{ color: TEXT }}>{plan.navn}</span>
+                          <span className="font-display" style={{ fontSize: 20, color: TEXT }}>
+                            {plan.kr.toLocaleString("da-DK")} kr
+                            <span className="text-[11px]" style={{ color: MUTED }}> /md</span>
+                          </span>
+                        </div>
+                        <p className="text-[11px] mb-3" style={{ color: MUTED }}>{plan.beskrivelse}</p>
+                        <ul className="mb-4">
+                          {plan.punkter.map((pt) => (
+                            <li key={pt} className="text-[11px] flex gap-2 mb-1" style={{ color: TEXT }}>
+                              <span style={{ color: ACCENT }}>·</span> {pt}
+                            </li>
+                          ))}
+                        </ul>
+                        <button
+                          onClick={() => tegnAbonnement(plan.noegle)}
+                          disabled={portSender || !(profil && profil.betalingAktivt) || !bruger}
+                          className="w-full rounded-full"
+                          style={{ backgroundColor: ACCENT, color: "#fff", padding: "10px 0", fontSize: 13,
+                                   opacity: portSender || !(profil && profil.betalingAktivt) || !bruger ? 0.45 : 1 }}
+                        >
+                          {!bruger ? "Log ind først" : !(profil && profil.betalingAktivt) ? "Åbner snart" : "Vælg " + plan.navn}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[11px] mb-6" style={{ color: MUTED }}>
+                    Basis-videoen er gratis og uden grænse. Priserne er uden moms. Kort, Apple Pay
+                    og MobilePay.
+                  </p>
+                </>
+              )}
+
+              {portFejl && <p className="text-xs mb-4" style={{ color: AMBER }}>{portFejl}</p>}
+
+              <button onClick={() => { setMenuAaben(false); logUd(); }} className="text-xs" style={{ color: MUTED }}>
+                Log ud
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Ét vindue, tre grunde. Det er altid samme øjeblik: nogen rakte efter opgraderingen og
           måtte ikke. Gratis-versionen ser det aldrig. */}
