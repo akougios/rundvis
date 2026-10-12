@@ -2621,11 +2621,22 @@ function Rundvis() {
               Når abonnement og forbrug kommer, er det her de hører hjemme. */}
           {opsaetningLoadet && (
             bruger ? (
-              <button onClick={() => setMenuAaben(true)} className="text-xs" style={{ color: MUTED }}>
+              <button
+                onClick={() => setMenuAaben(true)}
+                className="rounded-full"
+                style={{ border: `1px solid ${LINE}`, color: TEXT, padding: "7px 16px", fontSize: 13 }}
+              >
                 {bruger.email}
               </button>
             ) : loginMuligt ? (
-              <button onClick={() => kraevAdgang("login")} className="text-xs" style={{ color: MUTED }}>
+              // Grå tekst var for stille. Spurgt to gange om man overhovedet kunne logge ind
+              // på forsiden, og hvis man skal lede efter en knap, er den ikke en knap. Stadig
+              // ikke en mur: en mur er en login-skærm ved ankomst, ikke et tilbud i hjørnet.
+              <button
+                onClick={() => kraevAdgang("login")}
+                className="rounded-full"
+                style={{ border: `1px solid ${LINE}`, color: TEXT, padding: "7px 16px", fontSize: 13 }}
+              >
                 Log ind
               </button>
             ) : null
