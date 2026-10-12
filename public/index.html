@@ -59,17 +59,78 @@ function gemAdgang(token) {
   try { if (token) localStorage.setItem(ACCESS_KEY, token); else localStorage.removeItem(ACCESS_KEY); } catch (e) {}
 }
 
-// Wraps fetch so no paid call can be written without the header by accident - the one thing that
-// would quietly reopen the hole this closes.
-async function kaldMedAdgang(url, init, onAfvist) {
-  const token = gemtAdgang();
+// LOGIN — Supabase, loaded only when it is actually needed.
+//
+// Not in the page head: the free version is the thing an agent meets first, and it should not
+// wait on 60 kB of sign-in machinery it will never use. Loaded the first time someone reaches
+// for the upgrade, which is also the only place a login is asked for.
+const SUPABASE_CDN = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js";
+
+let opsaetning = null;     // what /api/config said
+let klient = null;         // the Supabase client, once built
+let klientLoefte = null;   // so two clicks do not load the script twice
+let session = null;        // the live session, kept current by onAuthStateChange
+
+async function hentOpsaetning() {
+  if (opsaetning) return opsaetning;
+  try {
+    const r = await fetch("/api/config");
+    opsaetning = r.ok ? await r.json() : { loginAktivt: false };
+  } catch (e) {
+    opsaetning = { loginAktivt: false };
+  }
+  return opsaetning;
+}
+
+function indlaesScript(src) {
+  return new Promise((ok, fejl) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = ok;
+    s.onerror = () => fejl(new Error("Kunne ikke hente login. Tjek forbindelsen."));
+    document.head.appendChild(s);
+  });
+}
+
+async function hentKlient() {
+  if (klient) return klient;
+  if (klientLoefte) return klientLoefte;
+  klientLoefte = (async () => {
+    const cfg = await hentOpsaetning();
+    if (!cfg.loginAktivt) return null;
+    if (!(window.supabase && window.supabase.createClient)) await indlaesScript(SUPABASE_CDN);
+    klient = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+    const { data } = await klient.auth.getSession();
+    session = data ? data.session : null;
+    klient.auth.onAuthStateChange((_, s) => { session = s; });
+    return klient;
+  })();
+  return klientLoefte;
+}
+
+function loggetInd() {
+  return Boolean(session && session.access_token);
+}
+
+// Wraps fetch so no paid call can be written without its credentials by accident - the one
+// thing that would quietly reopen the hole this closes.
+//
+// Two credentials, and the server decides which it wants: the bearer token once login is set
+// up, the shared code before that. Sending both costs nothing and means the page does not have
+// to know which world it is in.
+async function kaldMedAdgang(url, init, paaAfvist) {
   const headers = Object.assign({}, (init && init.headers) || {});
-  if (token) headers["x-rundvis-access"] = token;
+  const kode = gemtAdgang();
+  if (kode) headers["x-rundvis-access"] = kode;
+  if (!session && (await hentOpsaetning()).loginAktivt) await hentKlient();
+  if (loggetInd()) headers.Authorization = `Bearer ${session.access_token}`;
+
   const r = await fetch(url, Object.assign({}, init, { headers }));
-  if (r.status === 401) {
-    gemAdgang("");
-    if (onAfvist) onAfvist();
-    throw new Error("Adgangen er udløbet. Indtast koden igen.");
+  if (r.status === 401 || r.status === 402) {
+    const krop = await r.json().catch(() => ({}));
+    if (r.status === 401 && !krop.needsLogin) gemAdgang("");   // the old shared code, expired
+    if (paaAfvist) paaAfvist(krop.needsLogin ? "login" : krop.needsSubscription ? "abonnement" : "kode");
+    throw new Error(krop.error || "Du har ikke adgang til at gøre det.");
   }
   return r;
 }
@@ -1505,33 +1566,86 @@ function Rundvis() {
   const [showSource, setShowSource] = useState("upgraded");
   // The access code, asked for only when a paid action is refused. The free version stays open to
   // everyone, which is both the honest product and one less thing between an agent and the demo.
-  const [adgangKraevet, setAdgangKraevet] = useState(false);
+  // "" lukket · "login" · "abonnement" · "kode". Ét vindue, tre grunde, fordi det altid er
+  // samme øjeblik: nogen rakte efter opgraderingen og måtte ikke.
+  const [port, setPort] = useState("");
+  const [email, setEmail] = useState("");
+  const [kodeord, setKodeord] = useState("");
+  const [opretter, setOpretter] = useState(false);     // tilmelding frem for login
+  const [portFejl, setPortFejl] = useState("");
+  const [portBesked, setPortBesked] = useState("");
+  const [portSender, setPortSender] = useState(false);
+  const [bruger, setBruger] = useState(null);
   const [adgangKode, setAdgangKode] = useState("");
-  const [adgangFejl, setAdgangFejl] = useState("");
-  const [adgangSender, setAdgangSender] = useState(false);
-  const kraevAdgang = useCallback(() => setAdgangKraevet(true), []);
+  const kraevAdgang = useCallback((grund) => { setPortFejl(""); setPortBesked(""); setPort(grund || "kode"); }, []);
 
-  const indloesAdgang = async () => {
-    if (adgangSender) return;
-    setAdgangSender(true);
-    setAdgangFejl("");
-    try {
-      const r = await fetch("/api/access", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: adgangKode }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || "Koden blev ikke godkendt.");
-      gemAdgang(j.token || "");
-      setAdgangKraevet(false);
-      setAdgangKode("");
-    } catch (err) {
-      setAdgangFejl(err.message || "Koden blev ikke godkendt.");
-    } finally {
-      setAdgangSender(false);
-    }
+  // Hvem er logget ind, hvis nogen. Kører kun når login overhovedet er sat op, så gratis-brugeren
+  // aldrig venter på et netværkskald han ikke har brug for.
+  useEffect(() => {
+    let vaek = false;
+    (async () => {
+      const cfg = await hentOpsaetning();
+      if (vaek || !cfg.loginAktivt) return;
+      const k = await hentKlient().catch(() => null);
+      if (vaek || !k) return;
+      const { data } = await k.auth.getSession();
+      setBruger(data && data.session ? data.session.user : null);
+      k.auth.onAuthStateChange((_, s) => setBruger(s ? s.user : null));
+    })();
+    return () => { vaek = true; };
+  }, []);
+
+  const medPortFejl = async (fn) => {
+    if (portSender) return;
+    setPortSender(true); setPortFejl(""); setPortBesked("");
+    try { await fn(); } catch (err) { setPortFejl(err.message || "Det virkede ikke."); }
+    finally { setPortSender(false); }
   };
+
+  const logInd = () => medPortFejl(async () => {
+    const k = await hentKlient();
+    if (!k) throw new Error("Login er ikke sat op endnu.");
+    if (opretter) {
+      const { error } = await k.auth.signUp({ email, password: kodeord });
+      if (error) throw new Error(error.message);
+      // Supabase kan være sat til at kræve en bekræftelsesmail. Sig det frem for at lade
+      // brugeren stå med en knap der tilsyneladende ikke gjorde noget.
+      setPortBesked("Konto oprettet. Tjek din mail hvis vi beder om en bekræftelse.");
+      return;
+    }
+    const { error } = await k.auth.signInWithPassword({ email, password: kodeord });
+    if (error) throw new Error(error.message);
+    setPort(""); setKodeord("");
+  });
+
+  const logIndMedGoogle = () => medPortFejl(async () => {
+    const k = await hentKlient();
+    if (!k) throw new Error("Login er ikke sat op endnu.");
+    // Tilbage til samme side bagefter, så man lander hvor man slap frem for på forsiden.
+    const { error } = await k.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.href },
+    });
+    if (error) throw new Error(error.message);
+  });
+
+  const logUd = async () => {
+    const k = await hentKlient().catch(() => null);
+    if (k) await k.auth.signOut();
+    setBruger(null);
+  };
+
+  const indloesAdgang = () => medPortFejl(async () => {
+    const r = await fetch("/api/access", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: adgangKode }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "Koden blev ikke godkendt.");
+    gemAdgang(j.token || "");
+    setPort(""); setAdgangKode("");
+  });
+
   // Ticks while generating, only so the bar can advance on elapsed time. A clip takes about three
   // minutes, so a bar that moves only when one finishes stands perfectly still for minutes and
   // then jumps, which reads as broken rather than as patient.
@@ -2436,7 +2550,16 @@ function Rundvis() {
       <header className="px-5 pt-8 pb-6">
         <div className="max-w-3xl mx-auto flex items-baseline justify-between">
           <span className="font-display" style={{ fontSize: 30, letterSpacing: "-0.02em" }}>Rundvis</span>
-          <span className="text-xs hidden sm:block" style={{ color: MUTED }}></span>
+          {/* Kun når nogen ER logget ind. En tom plads hvor der kunne stå "log ind" ville invitere
+              gratis-brugeren til at tro at han skal, og det skal han ikke. */}
+          {bruger ? (
+            <span className="flex items-baseline gap-3">
+              <span className="text-xs hidden sm:block" style={{ color: MUTED }}>{bruger.email}</span>
+              <button onClick={logUd} className="text-xs" style={{ color: MUTED }}>Log ud</button>
+            </span>
+          ) : (
+            <span className="text-xs hidden sm:block" style={{ color: MUTED }}></span>
+          )}
         </div>
       </header>
 
@@ -3030,52 +3153,127 @@ function Rundvis() {
         )}
       </main>
 
-      {/* Asked for only when a paid call is refused - the free version never sees this. One
-          shared code for the whole product, which is the right size for a demo to named agents
-          and goes away when real accounts land. */}
-      {adgangKraevet && (
+      {/* Ét vindue, tre grunde. Det er altid samme øjeblik: nogen rakte efter opgraderingen og
+          måtte ikke. Gratis-versionen ser det aldrig. */}
+      {port && (
         <div
           className="fixed inset-0 flex items-center justify-center px-5"
           style={{ backgroundColor: "rgba(23,27,26,0.45)", zIndex: 50 }}
-          onClick={() => setAdgangKraevet(false)}
+          onClick={() => setPort("")}
         >
           <div
             className="w-full rounded-2xl p-6"
             style={{ maxWidth: 380, backgroundColor: SURFACE, boxShadow: "0 24px 60px rgba(0,0,0,0.25)" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <p className="text-sm mb-1" style={{ color: TEXT }}>Adgangskode</p>
-            <p className="text-[11px] mb-4" style={{ color: MUTED }}>
-              Gratis-versionen er åben. Opgraderingen kræver en kode.
-            </p>
-            <input
-              type="password"
-              autoFocus
-              value={adgangKode}
-              onChange={(e) => setAdgangKode(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") indloesAdgang(); }}
-              className="w-full rounded-xl px-3 py-2.5 text-sm mb-3"
-              style={{ border: `1px solid ${LINE}`, backgroundColor: INK, color: TEXT }}
-            />
-            {adgangFejl && <p className="text-xs mb-3" style={{ color: AMBER }}>{adgangFejl}</p>}
-            <button
-              onClick={indloesAdgang}
-              disabled={adgangSender || !adgangKode}
-              className="w-full rounded-full"
-              style={{
-                backgroundColor: ACCENT,
-                color: "#fff",
-                padding: "11px 0",
-                fontSize: 14,
-                opacity: adgangSender || !adgangKode ? 0.5 : 1,
-                cursor: adgangSender || !adgangKode ? "not-allowed" : "pointer",
-              }}
-            >
-              {adgangSender ? "Tjekker…" : "Lås op"}
-            </button>
+            {port === "kode" && (
+              <>
+                <p className="text-sm mb-1" style={{ color: TEXT }}>Adgangskode</p>
+                <p className="text-[11px] mb-4" style={{ color: MUTED }}>
+                  Gratis-versionen er åben. Opgraderingen kræver en kode.
+                </p>
+                <input
+                  type="password" autoFocus value={adgangKode}
+                  onChange={(e) => setAdgangKode(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") indloesAdgang(); }}
+                  className="w-full rounded-xl px-3 py-2.5 text-sm mb-3"
+                  style={{ border: `1px solid ${LINE}`, backgroundColor: INK, color: TEXT }}
+                />
+                {portFejl && <p className="text-xs mb-3" style={{ color: AMBER }}>{portFejl}</p>}
+                <button
+                  onClick={indloesAdgang} disabled={portSender || !adgangKode}
+                  className="w-full rounded-full"
+                  style={{ backgroundColor: ACCENT, color: "#fff", padding: "11px 0", fontSize: 14,
+                           opacity: portSender || !adgangKode ? 0.5 : 1 }}
+                >
+                  {portSender ? "Tjekker…" : "Lås op"}
+                </button>
+              </>
+            )}
+
+            {port === "login" && (
+              <>
+                <p className="text-sm mb-1" style={{ color: TEXT }}>
+                  {opretter ? "Opret konto" : "Log ind"}
+                </p>
+                <p className="text-[11px] mb-4" style={{ color: MUTED }}>
+                  Du kan lave videoer uden konto. Opgraderingen kræver én.
+                </p>
+
+                <button
+                  onClick={logIndMedGoogle} disabled={portSender}
+                  className="w-full rounded-full mb-3 flex items-center justify-center gap-2"
+                  style={{ border: `1px solid ${LINE}`, color: TEXT, padding: "10px 0", fontSize: 14,
+                           backgroundColor: SURFACE, opacity: portSender ? 0.5 : 1 }}
+                >
+                  <svg width="15" height="15" viewBox="0 0 48 48" aria-hidden="true">
+                    <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.8 6.1C12.3 13.2 17.6 9.5 24 9.5z"/>
+                    <path fill="#4285F4" d="M46.1 24.6c0-1.6-.1-3.1-.4-4.6H24v9.1h12.4c-.5 2.9-2.2 5.3-4.6 7l7.6 5.9c4.4-4.1 6.7-10.1 6.7-17.4z"/>
+                    <path fill="#FBBC05" d="M10.4 28.7c-.5-1.5-.8-3-.8-4.7s.3-3.2.8-4.7l-7.8-6.1C.9 16.5 0 20.1 0 24s.9 7.5 2.6 10.8l7.8-6.1z"/>
+                    <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.8 2.3-8.3 2.3-6.4 0-11.7-3.7-13.6-9.1l-7.8 6.1C6.5 42.6 14.6 48 24 48z"/>
+                  </svg>
+                  Fortsæt med Google
+                </button>
+
+                <div className="flex items-center gap-3 mb-3">
+                  <div style={{ height: 1, flex: 1, backgroundColor: LINE }} />
+                  <span className="text-[11px]" style={{ color: MUTED }}>eller</span>
+                  <div style={{ height: 1, flex: 1, backgroundColor: LINE }} />
+                </div>
+
+                <input
+                  type="email" autoFocus placeholder="E-mail" value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full rounded-xl px-3 py-2.5 text-sm mb-2"
+                  style={{ border: `1px solid ${LINE}`, backgroundColor: INK, color: TEXT }}
+                />
+                <input
+                  type="password" placeholder="Adgangskode" value={kodeord}
+                  onChange={(e) => setKodeord(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") logInd(); }}
+                  className="w-full rounded-xl px-3 py-2.5 text-sm mb-3"
+                  style={{ border: `1px solid ${LINE}`, backgroundColor: INK, color: TEXT }}
+                />
+                {portFejl && <p className="text-xs mb-3" style={{ color: AMBER }}>{portFejl}</p>}
+                {portBesked && <p className="text-xs mb-3" style={{ color: ACCENT }}>{portBesked}</p>}
+                <button
+                  onClick={logInd} disabled={portSender || !email || !kodeord}
+                  className="w-full rounded-full mb-3"
+                  style={{ backgroundColor: ACCENT, color: "#fff", padding: "11px 0", fontSize: 14,
+                           opacity: portSender || !email || !kodeord ? 0.5 : 1 }}
+                >
+                  {portSender ? "Et øjeblik…" : opretter ? "Opret konto" : "Log ind"}
+                </button>
+                <button
+                  onClick={() => { setOpretter((v) => !v); setPortFejl(""); setPortBesked(""); }}
+                  className="w-full text-[11px]" style={{ color: MUTED }}
+                >
+                  {opretter ? "Har du allerede en konto? Log ind" : "Ingen konto endnu? Opret én"}
+                </button>
+              </>
+            )}
+
+            {port === "abonnement" && (
+              <>
+                <p className="text-sm mb-1" style={{ color: TEXT }}>Opgradering kræver abonnement</p>
+                <p className="text-[11px] mb-4" style={{ color: MUTED }}>
+                  Basis-videoen er fri. For at sætte kameraet i bevægelse skal der være et aktivt
+                  abonnement på kontoen.
+                </p>
+                {portFejl && <p className="text-xs mb-3" style={{ color: AMBER }}>{portFejl}</p>}
+                <button
+                  onClick={() => setPort("")}
+                  className="w-full rounded-full"
+                  style={{ backgroundColor: ACCENT, color: "#fff", padding: "11px 0", fontSize: 14 }}
+                >
+                  Luk
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
+
     </div>
   );
 }
