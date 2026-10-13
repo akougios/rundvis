@@ -1385,9 +1385,11 @@ function FlythroughStage({ stills, specs, clips, onError, titles, logo, clockRef
 // Full HD in every orientation. The old 720-line sizes were a phone-first compromise; a listing
 // video goes on a property site and a big screen as often as it goes on Reels.
 const EXPORT_FORMATS = {
-  "16:9": { w: 1920, h: 1080, ar: 16 / 9, label: "Bredformat", where: "Boligsite, YouTube, storskærm" },
-  "9:16": { w: 1080, h: 1920, ar: 9 / 16, label: "Højformat", where: "Reels, TikTok, Stories" },
-  "1:1": { w: 1080, h: 1080, ar: 1, label: "Kvadratisk", where: "Instagram-feed" },
+  // Hvor formatet skal hen, med navn. En mægler tænker ikke i sidelængdeforhold, han tænker
+  // "den skal på Instagram" — og Instagram vil have to forskellige, så det skal stå på begge.
+  "16:9": { w: 1920, h: 1080, ar: 16 / 9, label: "Bredformat", where: "Boligsite, YouTube, Facebook" },
+  "9:16": { w: 1080, h: 1920, ar: 9 / 16, label: "Højformat", where: "Instagram Reels og Stories, TikTok" },
+  "1:1": { w: 1080, h: 1080, ar: 1, label: "Kvadratisk", where: "Instagram-feed, Facebook-opslag" },
 };
 
 function pickRecorderMime() {
@@ -3071,8 +3073,10 @@ function Rundvis() {
                 </div>
               )}
 
+              {/* Format og tempo i samme række, lige under afspilleren: begge ændrer det man ser
+                  på skærmen, så de skal kunne nås uden at rulle væk fra det de ændrer. */}
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
-                <div className="mb-4 flex flex-wrap items-center gap-2">
+                <div className="mb-1 flex flex-wrap items-center gap-2">
                   {Object.keys(EXPORT_FORMATS).map((f) => {
                     const on = previewFormat === f;
                     return (
@@ -3090,7 +3094,36 @@ function Rundvis() {
                       </button>
                     );
                   })}
+
+                  {/* Formatpiller og tempopiller ser ens ud, så uden en streg imellem læses de
+                      seks som én gruppe hvor man kun kan vælge ét. */}
+                  <span className="mx-2" style={{ width: 1, height: 18, backgroundColor: "rgba(110,117,112,0.35)", display: "inline-block" }} />
+
+                  {TEMPI.map((t) => {
+                    const on = tempo === t.id;
+                    return (
+                      <button
+                        key={t.id}
+                        onClick={() => setTempo(t.id)}
+                        className="px-3 py-1.5 rounded-full text-xs whitespace-nowrap transition-colors"
+                        style={{
+                          border: `1px solid ${on ? ACCENT : LINE}`,
+                          backgroundColor: on ? ACCENT : "transparent",
+                          color: on ? "#fff" : MUTED,
+                        }}
+                      >
+                        {t.navn}
+                      </button>
+                    );
+                  })}
+                  <span className="text-xs" style={{ color: MUTED }}>{Math.round(showTotalMs / 1000)} sek.</span>
                 </div>
+              )}
+
+              {flythroughStatus === "done" && flythroughStills.length > 0 && (
+                <p className="text-[11px] mb-4" style={{ color: MUTED }}>
+                  {EXPORT_FORMATS[previewFormat].where}
+                </p>
               )}
 
               {/* The rooms, big enough to read and draggable, because an agent's first instinct
@@ -3307,28 +3340,6 @@ function Rundvis() {
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="mb-6 pt-6" style={{ borderTop: `1px solid ${LINE}` }}>
-                  <p className="text-sm mb-1" style={{ color: TEXT }}>Tempo</p>
-                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>
-                    Ændrer hvor længe hvert rum står på skærmen. Musikken spiller videre i sit
-                    eget tempo — filmen bliver bare kortere eller længere.
-                  </p>
-                  <div className="flex gap-2 mb-6">
-                    {TEMPI.map((t) => (
-                      <button key={t.id} onClick={() => setTempo(t.id)}
-                        className="px-4 py-2 rounded-full text-sm"
-                        style={{
-                          border: `1px solid ${tempo === t.id ? ACCENT : LINE}`,
-                          backgroundColor: tempo === t.id ? ACCENT : "transparent",
-                          color: tempo === t.id ? "#fff" : TEXT,
-                        }}>
-                        {t.navn}
-                      </button>
-                    ))}
-                    <span className="self-center text-[11px]" style={{ color: MUTED }}>
-                      {Math.round(showTotalMs / 1000)} sek.
-                    </span>
-                  </div>
-
                   <p className="text-sm mb-1" style={{ color: TEXT }}>Jeres logo</p>
                   <p className="text-[11px] mb-3" style={{ color: MUTED }}>
                     Står nederst til højre hele videoen. En PNG med gennemsigtig baggrund ser bedst ud.
