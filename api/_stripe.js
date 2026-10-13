@@ -54,12 +54,15 @@ export const PLANER = {
 // prioritet i. De fire nederste er heller ikke bygget endnu — se noten i README før siden
 // vises frem for nogen der kan betale.
 export const FORDELE = [
+  // De to første er sande for alle, også Enkelt: begge virker i appen i dag. De står her fordi
+  // kunden skal kunne se hvad han får, ikke kun hvad han mangler — men de sælger ikke et
+  // niveau, og det skal de heller ikke lade som om.
+  { tekst: "Alle formater — Reels, Stories, Instagram og boligsite", har: ["enkelt", "maegler", "kontor", "kaede"] },
+  { tekst: "Jeres egen musik på videoen", har: ["enkelt", "maegler", "kontor", "kaede"] },
   { tekst: "Alle på kontoret kan logge ind", har: ["maegler", "kontor", "kaede"] },
   { tekst: "Ubrugte boliger ruller en måned videre", har: ["maegler", "kontor", "kaede"] },
   { tekst: "Personlig support", har: ["maegler", "kontor", "kaede"] },
   { tekst: "Eget logo og farver", har: ["kontor", "kaede"] },
-  { tekst: "Forbrugsrapport per kontor", har: ["kaede"] },
-  { tekst: "API til jeres eget sagssystem", har: ["kaede"] },
 ];
 
 // Ekstra ud over det inkluderede. Begge er dyrere end stykprisen på ens eget niveau, så der
