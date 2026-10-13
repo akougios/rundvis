@@ -18,7 +18,12 @@ export const PLANER = {
   enkelt: {
     navn: "Enkelt",
     beskrivelse: "Én bolig, ingen binding",
-    oere: 59500,                  // 595 kr
+    // 895 kr, ikke 595. Tallet er ikke valgt efter fornemmelse, men efter hvor skiftet skal
+    // ligge: ved 595 kr kunne en mægler købe fire enkeltvideoer for mindre end Mægler koster,
+    // og den typiske danske mæglervirksomhed laver 3-6 boliger om måneden. Enkelt var altså
+    // billigere end abonnementet for præcis den kunde abonnementet er lavet til. Ved 895 kr
+    // bliver Mægler billigere fra tredje bolig, og Enkelt er det den skal være: en prøve.
+    oere: 89500,                  // 895 kr
     inkluderede: 1,
     slags: "engang",
   },
@@ -54,13 +59,13 @@ export const PLANER = {
 // prioritet i. De fire nederste er heller ikke bygget endnu — se noten i README før siden
 // vises frem for nogen der kan betale.
 export const FORDELE = [
-  // Fem linjer. De tre første skiller abonnement fra enkeltkøb, de to sidste skiller Kontor
+  // Fem linjer. De to første skiller abonnement fra enkeltkøb, de tre sidste skiller Kontor
   // fra Mægler — og begge er ting vi gør én gang per kunde, ikke én gang per bolig. Det er
   // betingelsen for at de må stå her: en fordel der koster os penge hver måned, æder den
   // dækningsgrad hele modellen bygger på.
   { tekst: "Eget logo og farver", har: ["maegler", "kontor", "kaede"] },
   { tekst: "Alle på kontoret kan logge ind", har: ["maegler", "kontor", "kaede"] },
-  { tekst: "Ubrugte boliger ruller en måned videre", har: ["maegler", "kontor", "kaede"] },
+  { tekst: "Ubrugte boliger ruller en måned videre", har: ["kontor", "kaede"] },
   { tekst: "Jeres egen videostil, sat op sammen med os", har: ["kontor", "kaede"] },
   { tekst: "Fast kontaktperson, svar inden for en arbejdsdag", har: ["kontor", "kaede"] },
 ];
