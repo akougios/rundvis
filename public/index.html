@@ -935,6 +935,14 @@ function drawTitles(octx, W, H, titles, idx, lastIdx, local, durationMs) {
   octx.restore();
 }
 
+// Hvor i musikfilen vi skal være, når filmen står på filmMs. To modulo'er, og de er ikke det
+// samme: den første fordi filmen looper, den anden fordi musikken kan være kortere end filmen.
+// Ligger som sin egen funktion frem for inde i komponenten, så den kan afprøves alene.
+function musikTidFor(filmMs, totalMs, lydLaengde) {
+  if (!(totalMs > 0) || !(lydLaengde > 0) || !Number.isFinite(filmMs)) return 0;
+  return ((((filmMs % totalMs) + totalMs) % totalMs) / 1000) % lydLaengde;
+}
+
 // MÆGLERENS LOGO, nede i højre hjørne.
 //
 // Tre valg der er værd at kende. Størrelsen regnes ud fra billedets KORTESTE side, ikke
@@ -1587,6 +1595,39 @@ function Rundvis() {
     c.baseMs = c.playing ? c.baseMs + (now - c.since) : c.baseMs;
     c.since = now;
     Object.assign(c, patch);
+    synkMusik();
+  };
+
+  // MUSIKKEN FØLGER FILMEN.
+  //
+  // Lydelementet har sit eget ur, og filmen har sit. Før kørte de ved siden af hinanden: man
+  // kunne pause billedet og høre musikken spille videre, og spole uden at lyden flyttede sig.
+  // Nu sættes lyden efter filmens ur hver gang uret ændrer sig — afspil, pause, spoling — og
+  // efterses undervejs, fordi to ure driver fra hinanden af sig selv uanset hvor pænt de
+  // startede.
+  //
+  // Alt læses fra refs frem for fra state: funktionen kaldes fra setClock og fra animationens
+  // løkke, altså steder hvor en værdi fra sidste render ville være forkert.
+  const showTotalRef = useRef(0);
+  const lydAktivRef = useRef(false);
+  const synkMusik = () => {
+    const a = previewAudioRef.current;
+    if (!a) return;
+    if (!lydAktivRef.current) { if (!a.paused) a.pause(); return; }
+    // Varigheden er NaN indtil browseren har læst filens hoved.
+    if (!Number.isFinite(a.duration) || a.duration <= 0) return;
+    const total = showTotalRef.current;
+    if (!total) return;
+    const c = clockRef.current;
+    const filmMs = c.playing ? c.baseMs + (performance.now() - c.since) : c.baseMs;
+    // Filmen looper, og musikken skal loope med den: starter billedet forfra, gør takten også.
+    // Det er samme forhold som i den hentede fil, hvor lyden starter sammen med optagelsen.
+    const vil = musikTidFor(filmMs, total, a.duration);
+    // En tærskel, ikke en konstant rettelse: at sætte currentTime hver frame giver et hak man
+    // kan høre. 120 ms er under det man opfatter som ude af trit.
+    if (Math.abs(a.currentTime - vil) > 0.12) { try { a.currentTime = vil; } catch (e) {} }
+    if (c.playing && a.paused) a.play().catch(() => {});
+    if (!c.playing && !a.paused) a.pause();
   };
 
   // Music. The agent supplies the track: bundling one would mean shipping music we have no
@@ -2322,14 +2363,17 @@ function Rundvis() {
   };
   const fjernLogo = () => { logoRef.current = null; setLogoNavn(""); setLogoFejl(""); };
 
-  // The preview track follows the page: it plays while the walkthrough is on screen and stops
-  // when it is not, so music never keeps running behind a different step.
+  // Hvornår der overhovedet skal lyde noget. Selve synkroniseringen ligger i synkMusik; her
+  // afgøres kun om musikken er i spil, så den aldrig kører bag et andet trin.
   useEffect(() => {
     const a = previewAudioRef.current;
-    if (!a) return;
-    const spiller = step === 2 && musicOnPreview && flythroughStatus === "done";
-    if (spiller) { a.currentTime = 0; a.play().catch(() => {}); } else { a.pause(); }
-    return () => { a.pause(); };
+    lydAktivRef.current = step === 2 && musicOnPreview && flythroughStatus === "done";
+    synkMusik();
+    // Varigheden kender vi måske først når filen er læst; så synkroniseres der igen.
+    if (a) a.addEventListener("loadedmetadata", synkMusik);
+    return () => {
+      if (a) { a.removeEventListener("loadedmetadata", synkMusik); a.pause(); }
+    };
   }, [step, musicOnPreview, flythroughStatus, musicName]);
 
   // ---- Model bake-off ----
@@ -2359,11 +2403,15 @@ function Rundvis() {
   // The scrubber is moved by writing to the element directly. Driving it from state would
   // re-render the whole page - thumbnails and all - on every frame, to move one bar.
   const showTotalMs = flythroughParams.reduce((a, sp) => a + sp.durationMs, 0);
+  showTotalRef.current = showTotalMs;
   useEffect(() => {
     if (flythroughStatus !== "done" || !showTotalMs) return;
-    let raf = 0;
+    let raf = 0, tæl = 0;
     const step = () => {
       raf = requestAnimationFrame(step);
+      // Efterse lyden et par gange i sekundet. Uret bag et lydelement og performance.now()
+      // driver fra hinanden, og filmens loop skal trække musikken med tilbage til start.
+      if ((tæl++ % 20) === 0) synkMusik();
       const el = scrubRef.current;
       if (!el) return;
       const t = ((filmNow() % showTotalMs) + showTotalMs) % showTotalMs;
