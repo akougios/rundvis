@@ -59,14 +59,13 @@ export const PLANER = {
 // prioritet i. De fire nederste er heller ikke bygget endnu — se noten i README før siden
 // vises frem for nogen der kan betale.
 export const FORDELE = [
-  // Fem linjer. De to første skiller abonnement fra enkeltkøb, de tre sidste skiller Kontor
-  // fra Mægler — og begge er ting vi gør én gang per kunde, ikke én gang per bolig. Det er
+  // Fire linjer, to og to. De to første skiller abonnement fra enkeltkøb, de to sidste skiller
+  // Kontor fra Mægler — og begge er ting vi gør én gang per kunde, ikke én gang per bolig. Det er
   // betingelsen for at de må stå her: en fordel der koster os penge hver måned, æder den
   // dækningsgrad hele modellen bygger på.
   { tekst: "Eget logo og farver", har: ["maegler", "kontor", "kaede"] },
   { tekst: "Alle på kontoret kan logge ind", har: ["maegler", "kontor", "kaede"] },
   { tekst: "Ubrugte boliger ruller en måned videre", har: ["kontor", "kaede"] },
-  { tekst: "Jeres egen videostil, sat op sammen med os", har: ["kontor", "kaede"] },
   { tekst: "Fast kontaktperson, svar inden for en arbejdsdag", har: ["kontor", "kaede"] },
 ];
 
