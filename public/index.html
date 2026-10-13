@@ -935,6 +935,37 @@ function drawTitles(octx, W, H, titles, idx, lastIdx, local, durationMs) {
   octx.restore();
 }
 
+// MÆGLERENS LOGO, nede i højre hjørne.
+//
+// Tre valg der er værd at kende. Størrelsen regnes ud fra billedets KORTESTE side, ikke
+// bredden: ellers ville det samme logo fylde dobbelt så meget i 9:16 som i 16:9, og en mægler
+// der laver begge formater af samme bolig ville få to forskellige videoer. Hjørnet er nederst
+// til højre, fordi åbningsteksten står nederst til venstre og sluttekstens navn står midtfor —
+// det er det eneste hjørne der aldrig er optaget. Og der ligger en skygge under det, fordi et
+// mørkt logo på en hvid køkkenvæg ellers forsvinder; en plade bagved ville se ud som et
+// klistermærke.
+const LOGO_HOEJDE = 0.075;   // af korteste side
+const LOGO_MAX_BRED = 0.26;  // af bredden
+const LOGO_KANT = 0.06;      // af korteste side, ens vandret og lodret
+
+function drawLogo(octx, W, H, logo) {
+  if (!logo || !logo.naturalWidth || !logo.naturalHeight) return;
+  const kort = Math.min(W, H);
+  let h = kort * LOGO_HOEJDE;
+  let w = h * (logo.naturalWidth / logo.naturalHeight);
+  // Et bredt, lavt logo — og de fleste mæglerlogoer er brede — skal holdes i snor på bredden,
+  // ellers løber det ind over midten af billedet.
+  if (w > W * LOGO_MAX_BRED) { w = W * LOGO_MAX_BRED; h = w * (logo.naturalHeight / logo.naturalWidth); }
+  const m = kort * LOGO_KANT;
+  octx.save();
+  octx.globalAlpha = 0.95;
+  octx.shadowColor = "rgba(0,0,0,0.45)";
+  octx.shadowBlur = Math.round(kort * 0.012);
+  octx.shadowOffsetY = Math.round(kort * 0.004);
+  octx.drawImage(logo, Math.round(W - m - w), Math.round(H - m - h), Math.round(w), Math.round(h));
+  octx.restore();
+}
+
 // Composes ONE frame of the finished show onto a 2D context: the right shot at the right point
 // in its move, whatever the transition into it calls for, then the grade.
 //
@@ -991,6 +1022,7 @@ function composeShowFrame(octx, W, H, shots, tMs, opts) {
   // Before the top-and-tail fade, so the title comes up out of black with the picture rather
   // than sitting on top of it.
   drawTitles(octx, W, H, opts && opts.titles, idx, shots.length - 1, local, shot.spec.durationMs);
+  drawLogo(octx, W, H, opts && opts.logo);
 
   // Up from black at the top and down at the tail. In the looping preview this reads as a
   // deliberate top-and-tail rather than a seam.
@@ -1205,11 +1237,13 @@ function releaseShot(shot) {
 //
 // Composition goes through composeShowFrame, the same function the exporter uses, so the file
 // that is downloaded is frame for frame what was on screen.
-function FlythroughStage({ stills, specs, clips, onError, titles, clockRef }) {
+function FlythroughStage({ stills, specs, clips, onError, titles, logo, clockRef }) {
   // Held in a ref, not a dependency: typing an address must update the frame on the next tick,
   // not tear down the canvas and rebuild every plate on each keystroke.
   const titlesRef = React.useRef(titles);
   titlesRef.current = titles;
+  const logoRef = React.useRef(logo);
+  logoRef.current = logo;
   const hostRef = useRef(null);
 
   useEffect(() => {
@@ -1292,7 +1326,7 @@ function FlythroughStage({ stills, specs, clips, onError, titles, clockRef }) {
         const tMs = c
           ? (c.playing ? c.baseMs + (performance.now() - c.since) : c.baseMs)
           : performance.now() - t0;
-        composeShowFrame(octx, W, H, shots, tMs, { titles: titlesRef.current });
+        composeShowFrame(octx, W, H, shots, tMs, { titles: titlesRef.current, logo: logoRef.current });
       };
       raf = requestAnimationFrame(tick);
     };
@@ -1349,7 +1383,7 @@ const HIDDEN_TAB_MSG =
   "Optagelsen kræver at denne fane er fremme. Browseren sætter canvas-optagelse på pause i en " +
   "baggrundsfane, og filen bliver tom. Lad fanen være synlig, og prøv igen.";
 
-async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, onProgress, musicBytes, titles }) {
+async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, onProgress, musicBytes, titles, logo }) {
   if (!window.MediaRecorder) throw new Error("Din browser understøtter ikke videooptagelse. Prøv Chrome eller Safari 17+.");
   const mime = pickRecorderMime();
   if (!mime) throw new Error("Din browser kan ikke optage video fra et canvas.");
@@ -1464,7 +1498,7 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
         if (wentHidden) break;
         const tMs = (f / fps) * 1000;
         // Same composer as the live preview, so the file is frame for frame what was on screen.
-        composeShowFrame(octx, w, h, shots, tMs, { titles });
+        composeShowFrame(octx, w, h, shots, tMs, { titles, logo });
         if (manualFrames) track.requestFrame();
 
         if (f % 5 === 0 && onProgress) onProgress({ phase: "render", current: f + 1, total: totalFrames });
@@ -1562,6 +1596,11 @@ function Rundvis() {
   // is complete without them, and a half-filled title is worse than none.
   const [titles, setTitles] = useState({ headline: "", agent: "" });
   const [musicName, setMusicName] = useState("");
+  // Logoet holdes i en ref, fordi hver frame skal kunne tegne det uden at vente på en render,
+  // og i state kun som navn, så siden tegner om når der kommer et nyt.
+  const logoRef = useRef(null);
+  const [logoNavn, setLogoNavn] = useState("");
+  const [logoFejl, setLogoFejl] = useState("");
   const [musicError, setMusicError] = useState("");
   const [musicOnPreview, setMusicOnPreview] = useState(true);
   const musicBufferRef = useRef(null);   // decoded AudioBuffer
@@ -2259,6 +2298,30 @@ function Rundvis() {
     }
   };
 
+  const handleLogoFile = (file) => {
+    if (!file) return;
+    setLogoFejl("");
+    const læser = new FileReader();
+    læser.onload = (e) => {
+      const im = new Image();
+      im.onload = () => {
+        // En SVG uden angivne mål får naturalWidth 0 og tegnes aldrig. Bedre at sige det end
+        // at lade mægleren hente en video hvor logoet mangler uden forklaring.
+        if (!im.naturalWidth || !im.naturalHeight) {
+          setLogoFejl("Filen har ingen mål. Prøv en PNG.");
+          return;
+        }
+        logoRef.current = im;
+        setLogoNavn(file.name);
+      };
+      im.onerror = () => setLogoFejl("Kunne ikke læse filen. Prøv en PNG, JPG eller SVG.");
+      im.src = e.target.result;
+    };
+    læser.onerror = () => setLogoFejl("Kunne ikke læse filen.");
+    læser.readAsDataURL(file);
+  };
+  const fjernLogo = () => { logoRef.current = null; setLogoNavn(""); setLogoFejl(""); };
+
   // The preview track follows the page: it plays while the walkthrough is on screen and stops
   // when it is not, so music never keeps running behind a different step.
   useEffect(() => {
@@ -2601,6 +2664,7 @@ function Rundvis() {
         clips: hqClips,
         musicBytes: musicRawRef.current,
         titles,
+        logo: logoRef.current,
         format,
         fps: 30,
         onProgress: setExportProgress,
@@ -2899,6 +2963,7 @@ function Rundvis() {
                     clips={shownClips}
                     onError={(m) => { setFlythroughError(m); setFlythroughStatus("error"); }}
                     titles={titles}
+                    logo={logoNavn ? logoRef.current : null}
                     clockRef={clockRef}
                   />
                 </div>
@@ -3166,6 +3231,31 @@ function Rundvis() {
                       style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}`, color: TEXT }}
                     />
                   </div>
+                </div>
+              )}
+
+              {flythroughStatus === "done" && flythroughStills.length > 0 && (
+                <div className="mb-6 pt-6" style={{ borderTop: `1px solid ${LINE}` }}>
+                  <p className="text-sm mb-1" style={{ color: TEXT }}>Jeres logo</p>
+                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>
+                    Står nederst til højre hele videoen. En PNG med gennemsigtig baggrund ser bedst ud.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="flex items-center gap-2 px-4 py-2 rounded-full text-sm cursor-pointer"
+                           style={{ border: `1px solid ${LINE}`, color: TEXT }}>
+                      <Icon name="upload" size={15} />
+                      {logoNavn ? "Skift logo" : "Vælg logofil"}
+                      <input type="file" accept="image/png,image/jpeg,image/svg+xml" className="hidden"
+                             onChange={(e) => handleLogoFile(e.target.files && e.target.files[0])} />
+                    </label>
+                    {logoNavn && (
+                      <>
+                        <span className="text-[11px]" style={{ color: MUTED }}>{logoNavn}</span>
+                        <button onClick={fjernLogo} className="text-[11px]" style={{ color: MUTED }}>Fjern</button>
+                      </>
+                    )}
+                  </div>
+                  {logoFejl && <p className="text-xs mt-2" style={{ color: AMBER }}>{logoFejl}</p>}
                 </div>
               )}
 

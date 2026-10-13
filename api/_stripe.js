@@ -63,7 +63,7 @@ export const FORDELE = [
   // Kontor fra Mægler — og begge er ting vi gør én gang per kunde, ikke én gang per bolig. Det er
   // betingelsen for at de må stå her: en fordel der koster os penge hver måned, æder den
   // dækningsgrad hele modellen bygger på.
-  { tekst: "Eget logo og farver", har: ["maegler", "kontor", "kaede"] },
+  { tekst: "Jeres logo på videoen", har: ["maegler", "kontor", "kaede"] },
   { tekst: "Alle på kontoret kan logge ind", har: ["maegler", "kontor", "kaede"] },
   { tekst: "Ubrugte boliger ruller en måned videre", har: ["kontor", "kaede"] },
   { tekst: "Fast kontaktperson, svar inden for en arbejdsdag", har: ["kontor", "kaede"] },
