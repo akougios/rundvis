@@ -3,7 +3,7 @@
 // samme — ikke fylde sig selv ud mens man kigger på den.
 
 import { brugerFraToken, kontoFor, supabaseErSat } from "./_konto.js";
-import { PLANER, stripeErSat } from "./_stripe.js";
+import { PLANER, FORDELE, stripeErSat } from "./_stripe.js";
 
 const sb = () => (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
 const service = () => process.env.SUPABASE_SERVICE_KEY || "";
@@ -28,7 +28,10 @@ async function brugtIPerioden(kontoId, fra) {
 export default async function handler(req, res) {
   const planer = Object.entries(PLANER).map(([noegle, p]) => ({
     noegle, navn: p.navn, beskrivelse: p.beskrivelse,
-    kr: Math.round(p.oere / 100), inkluderede: p.inkluderede, punkter: p.punkter,
+    kr: Math.round(p.oere / 100), inkluderede: p.inkluderede,
+    // Hele listen, hver linje med om DEN her plan har den. Frontenden streger resten over
+    // frem for at udelade dem, så kortene kan læses ved siden af hinanden.
+    fordele: FORDELE.map((f) => ({ tekst: f.tekst, med: f.har.includes(noegle) })),
     slags: p.slags,
     // Stykprisen regnes her frem for i frontenden, så de to ikke kan komme til at vise
     // forskellige tal for samme plan.

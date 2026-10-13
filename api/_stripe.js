@@ -21,7 +21,6 @@ export const PLANER = {
     oere: 59500,                  // 595 kr
     inkluderede: 1,
     slags: "engang",
-    punkter: ["Betal når du har en sag", "Ingen binding", "Samme video som abonnementerne"],
   },
   maegler: {
     navn: "Mægler",
@@ -29,7 +28,6 @@ export const PLANER = {
     oere: 249500,                 // 2.495 kr — 499 kr per bolig
     inkluderede: 5,
     slags: "abonnement",
-    punkter: ["5 boliger om måneden", "Alle på kontoret kan logge ind", "Ubrugte boliger ruller en måned videre"],
   },
   kontor: {
     navn: "Kontor",
@@ -37,7 +35,6 @@ export const PLANER = {
     oere: 899500,                 // 8.995 kr — 450 kr per bolig
     inkluderede: 20,
     slags: "abonnement",
-    punkter: ["20 boliger om måneden", "Eget logo og farver", "Alle formater på én gang", "Prioritet i køen"],
   },
   kaede: {
     navn: "Kæde",
@@ -45,9 +42,25 @@ export const PLANER = {
     oere: 1300000,                // fra 13.000 kr — ~433 kr per bolig
     inkluderede: 30,
     slags: "aftale",
-    punkter: ["30 boliger og op", "Forbrugsrapport per kontor", "API til jeres eget sagssystem", "Prioriteret support"],
   },
 };
+
+// HVAD DER FØLGER MED. Én liste, ens på alle fire kort, hvor det man ikke får står streget
+// over frem for bare at mangle. Fire forskellige lister, hver med sine egne salgsord, lader
+// som om niveauerne er forskellige produkter — og en kunde der ikke kan se hvad han går glip
+// af, kan heller ikke se hvad han får.
+//
+// Intet står her som ikke er til at holde. "Prioritet i køen" er væk: der er ingen kø at have
+// prioritet i. De fire nederste er heller ikke bygget endnu — se noten i README før siden
+// vises frem for nogen der kan betale.
+export const FORDELE = [
+  { tekst: "Alle på kontoret kan logge ind", har: ["maegler", "kontor", "kaede"] },
+  { tekst: "Ubrugte boliger ruller en måned videre", har: ["maegler", "kontor", "kaede"] },
+  { tekst: "Personlig support", har: ["maegler", "kontor", "kaede"] },
+  { tekst: "Eget logo og farver", har: ["kontor", "kaede"] },
+  { tekst: "Forbrugsrapport per kontor", har: ["kaede"] },
+  { tekst: "API til jeres eget sagssystem", har: ["kaede"] },
+];
 
 // Ekstra ud over det inkluderede. Begge er dyrere end stykprisen på ens eget niveau, så der
 // altid er en grund til at rykke op frem for at købe løst.

@@ -3392,10 +3392,17 @@ function Rundvis() {
                             ? "1 bolig"
                             : `${plan.inkluderede} boliger — ${plan.perBolig.toLocaleString("da-DK")} kr per bolig`}
                         </p>
+                        {/* Samme seks linjer på alle kort. Det man ikke får bliver streget over
+                            frem for at forsvinde, så to kort kan læses ved siden af hinanden. */}
                         <ul className="mb-4">
-                          {plan.punkter.map((pt) => (
-                            <li key={pt} className="text-[11px] flex gap-2 mb-1" style={{ color: TEXT }}>
-                              <span style={{ color: ACCENT }}>·</span> {pt}
+                          {(plan.fordele || []).map((f) => (
+                            <li key={f.tekst} className="text-[11px] flex gap-2 mb-1"
+                                style={{ color: f.med ? TEXT : MUTED }}>
+                              {/* Stregen sidder på teksten, ikke på hele linjen: et barn kan ikke
+                                  fjerne forælderens text-decoration, så punkttegnet ville blive
+                                  streget med og linjen læses som en tankestreg. */}
+                              <span style={{ color: f.med ? ACCENT : MUTED }}>·</span>
+                              <span style={{ textDecoration: f.med ? "none" : "line-through" }}>{f.tekst}</span>
                             </li>
                           ))}
                         </ul>
