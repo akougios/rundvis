@@ -3,7 +3,7 @@
 // men én.
 
 import { maaBruge } from "../_konto.js";
-import { PLANER, prisFor, stripeKald, stripeErSat } from "../_stripe.js";
+import { PLANER, prisFor, stripeKald, stripeErSat, kanKoebes } from "../_stripe.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Kun POST er tilladt." }); return; }
@@ -17,6 +17,16 @@ export default async function handler(req, res) {
 
   const plan = (req.body && req.body.plan) || "";
   if (!PLANER[plan]) { res.status(400).json({ error: "Ukendt plan." }); return; }
+  // Enkelt og Kæde står på siden, men kan ikke betales her endnu. Frontenden viser dem uden
+  // købsknap; dette er spærringen for den der kalder api'et direkte.
+  if (!kanKoebes(plan)) {
+    res.status(409).json({
+      error: PLANER[plan].slags === "aftale"
+        ? "Kæde aftales direkte. Skriv til os."
+        : "Enkeltkøb er ikke åbnet endnu.",
+    });
+    return;
+  }
 
   const base = `https://${req.headers.host}`;
   try {

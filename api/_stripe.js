@@ -4,22 +4,58 @@
 // i det miljø koden blev skrevet i, og en usikker webhook-verifikation jeg ikke kan afprøve er
 // værre end en jeg selv har skrevet og testet. Kaldene er tre, og de er formularkodede.
 
+// NIVEAUERNE. Målt i boliger, ikke i brugere: en bruger koster os ingenting, en bolig koster os
+// fjorten Luma-klip. Derfor er alle betalte niveauer fri adgang for hele kontoret, og derfor er
+// trappen nedad i pris per bolig flad med vilje — 595, 499, 450, 433. Mængderabat i software er
+// gratis at give; her går den direkte fra bundlinjen.
+//
+// "slags" afgør hvordan niveauet sælges, og de tre er ikke ens:
+//   abonnement  Stripe Checkout i subscription-tilstand. Virker i dag.
+//   engang      ét køb, én bolig. Kræver at kontoen kan holde løse boliger, og den søjle
+//               findes ikke i db/001_konti.sql endnu — derfor sælges den ikke endnu.
+//   aftale      prisen forhandles. Ingen knap kan gøre det, så den sender en mail.
 export const PLANER = {
+  enkelt: {
+    navn: "Enkelt",
+    beskrivelse: "Én bolig, ingen binding",
+    oere: 59500,                  // 595 kr
+    inkluderede: 1,
+    slags: "engang",
+    punkter: ["Betal når du har en sag", "Ingen binding", "Samme video som abonnementerne"],
+  },
+  maegler: {
+    navn: "Mægler",
+    beskrivelse: "Til den enkelte mægler",
+    oere: 249500,                 // 2.495 kr — 499 kr per bolig
+    inkluderede: 5,
+    slags: "abonnement",
+    punkter: ["5 boliger om måneden", "Alle på kontoret kan logge ind", "Ubrugte boliger ruller en måned videre"],
+  },
   kontor: {
     navn: "Kontor",
     beskrivelse: "Til ét mæglerkontor",
-    oere: 299500,                 // 2.995 kr
-    inkluderede: 10,
-    punkter: ["10 boliger om måneden", "Ubegrænset basis-video", "Alle formater"],
+    oere: 899500,                 // 8.995 kr — 450 kr per bolig
+    inkluderede: 20,
+    slags: "abonnement",
+    punkter: ["20 boliger om måneden", "Eget logo og farver", "Alle formater på én gang", "Prioritet i køen"],
   },
   kaede: {
     navn: "Kæde",
     beskrivelse: "Til flere kontorer",
-    oere: 1150000,                // 11.500 kr
-    inkluderede: 50,
-    punkter: ["50 boliger om måneden", "Flere brugere per konto", "Prioriteret support"],
+    oere: 1300000,                // fra 13.000 kr — ~433 kr per bolig
+    inkluderede: 30,
+    slags: "aftale",
+    punkter: ["30 boliger og op", "Forbrugsrapport per kontor", "API til jeres eget sagssystem", "Prioriteret support"],
   },
 };
+
+// Ekstra ud over det inkluderede. Begge er dyrere end stykprisen på ens eget niveau, så der
+// altid er en grund til at rykke op frem for at købe løst.
+export const EKSTRA = {
+  boligOere: 49500,               // 495 kr — billigere end Enkelt, dyrere end Mægler-stykprisen
+  billedeOere: 3500,              // 35 kr per billede ud over loftet. Kostprisen er cirka 10 kr.
+};
+
 
 const API = "https://api.stripe.com/v1";
 const noegle = () => process.env.STRIPE_SECRET_KEY || "";
@@ -72,10 +108,19 @@ export function prisFor(planNoegle) {
     price_data: {
       currency: "dkk",
       unit_amount: plan.oere,
-      recurring: { interval: "month" },
+      // Et engangskøb må ikke have recurring med. Sender man den til Stripe i
+      // payment-tilstand, afviser de kaldet.
+      ...(plan.slags === "abonnement" ? { recurring: { interval: "month" } } : {}),
       product_data: { name: `Rundvis ${plan.navn}` },
     },
   };
+}
+
+// Hvad der kan købes med et kort lige nu. Enkelt og Kæde står på siden med deres pris, men
+// kan ikke betales her: den ene mangler en søjle i databasen, den anden mangler en samtale.
+export function kanKoebes(planNoegle) {
+  const plan = PLANER[planNoegle];
+  return Boolean(plan && plan.slags === "abonnement");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -565,6 +565,22 @@ const VIGNETTE = 0.26;                    // corner darkening; reads as "graded"
 // It runs over generated clips and stills alike, which is most of why the two read as one film
 // instead of as two sources cut together.
 const GRADE_FILTER = "contrast(1.06) saturate(1.07) brightness(1.01)";
+
+// BILLEDER PER BOLIG.
+//
+// To grunde, og kun den ene er vores. Hvert billede bliver til et klip vi betaler for, så en
+// villa med atten rum koster halvanden gang hvad en lejlighed gør på en plan der sælges per
+// bolig. Men fjorten giver også en film på 39 sekunder, og boligvideoen denne klipning er målt
+// op mod varede 40. Ved atten ville den vare 50, og den ser ingen færdig.
+//
+// Den skal SIGES. Der lå før en grænse på 20 i filvælgeren som ingen steder stod skrevet, og en
+// grænse der stiltiende smider arbejde væk er værre end ingen grænse.
+const BILLED_LOFT = 14;
+
+// Kæde-niveauet forhandles, så der er ingen knap der kan sælge det. Står her tom, fordi en
+// mailadresse er en beslutning om hvem der tager telefonen — sæt den, og kortet bliver et
+// mailto-link i stedet for en linje tekst.
+const KONTAKT_MAIL = "";
 // Lifted, slightly cool black floor. Composited with "lighten", so it only touches pixels darker
 // than itself: shadows come off pure black - the filmic part - and everything else is untouched.
 const GRADE_LIFT = "rgb(12, 15, 22)";
@@ -1756,9 +1772,16 @@ function Rundvis() {
   const musicNodesRef = useRef(null);
 
   const kbParamsList = useMemo(() => scenes.map((_, i) => kenBurnsParamsFor(i)), [scenes.length]);
+  const [loftBesked, setLoftBesked] = useState("");
 
   const handleFiles = (fileList) => {
-    const files = Array.from(fileList).slice(0, 20 - images.length);
+    const alle = Array.from(fileList);
+    const plads = Math.max(0, BILLED_LOFT - images.length);
+    const files = alle.slice(0, plads);
+    // Træk tyve billeder ind på en plads til fjorten, og de sidste seks forsvandt før uden et ord.
+    setLoftBesked(alle.length > files.length
+      ? `Der er plads til ${BILLED_LOFT} billeder. ${alle.length - files.length} blev ikke lagt ind.`
+      : "");
     files.forEach((file) => {
       const reader = new FileReader();
       reader.onload = (e) => setImages((prev) => [...prev, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, src: e.target.result }]);
@@ -2174,12 +2197,20 @@ function Rundvis() {
     setHqStatus("idle");
     setHqError("");
     try {
-      // No cap. There used to be one at 20, which silently DROPPED every photo past it - a
-      // property with 28 rooms quietly became a film of the first 20, with nothing on screen to
-      // say so. The real constraint is memory at export time, where every photo is held as a
-      // prescaled plate at output size; that is worth fixing properly if it ever bites, not
-      // worth hiding behind a number that throws work away without telling anyone.
-      const used = images;
+      // FOURTEEN. The cap is back, but it says so now.
+      //
+      // There used to be one at 20 that silently DROPPED every photo past it, and that is the
+      // part that was wrong - a property with 28 rooms quietly became a film of the first 20
+      // with nothing on screen to explain it. This one is announced below the strip, and the
+      // photographs are already draggable, so "the first fourteen in your order" is a rule the
+      // agent can actually act on.
+      //
+      // Two reasons for the number, and only one of them is ours. Every photograph becomes a
+      // clip we pay for, so an eighteen-room villa costs half again what a flat does on a plan
+      // sold per property. But fourteen also makes a 39-second film, and the listing video this
+      // edit was measured against ran 40 - at eighteen it would run 50, which nobody watches to
+      // the end.
+      const used = images.slice(0, BILLED_LOFT);
       setFlythroughProgress({ current: 0, total: used.length });
       const stills = [];
       for (let i = 0; i < used.length; i++) {
@@ -2656,7 +2687,11 @@ function Rundvis() {
         {step === 1 && (
           <section>
             <h1 className="font-display text-2xl mb-1">Læg boligens billeder ind</h1>
-            <p className="text-sm mb-6" style={{ color: MUTED }}>Fra 3 billeder og op. Rækkefølgen bliver scenerækkefølgen.</p>
+            <p className="text-sm mb-2" style={{ color: MUTED }}>
+              Fra 3 til {BILLED_LOFT} billeder. Rækkefølgen bliver scenerækkefølgen.
+            </p>
+            {loftBesked && <p className="text-xs mb-4" style={{ color: AMBER }}>{loftBesked}</p>}
+            {!loftBesked && <div className="mb-4" />}
             <div onClick={() => fileInputRef.current?.click()} onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); }}
               className="rounded-lg p-8 text-center cursor-pointer mb-5" style={{ border: `1.5px dashed ${LINE}`, backgroundColor: SURFACE }}>
@@ -3320,18 +3355,43 @@ function Rundvis() {
                   del af produktet — ikke noget der først findes når alt er koblet på. */}
               {(!profil || !profil.konto || profil.konto.status !== "aktiv") && (
                 <>
-                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>Vælg abonnement</p>
+                  {/* GRATIS STÅR FØRST, og den er ikke et kort med en knap: der er intet at
+                      vælge. Den er allerede det man bruger. */}
+                  <div className="rounded-2xl p-5 mb-3" style={{ backgroundColor: SURFACE_2 }}>
+                    <div className="flex items-baseline justify-between mb-1">
+                      <span className="text-sm" style={{ color: TEXT }}>Gratis</span>
+                      <span className="font-display" style={{ fontSize: 20, color: TEXT }}>0 kr</span>
+                    </div>
+                    <p className="text-[11px]" style={{ color: MUTED }}>
+                      Basis-videoen, uden grænse og uden konto. Den du laver nu.
+                    </p>
+                  </div>
+
+                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>Opgradér med AI</p>
                   <div className="flex flex-col gap-3 mb-6">
-                    {(profil && profil.planer ? profil.planer : []).map((plan) => (
+                    {(profil && profil.planer ? profil.planer : []).map((plan) => {
+                      const abn = plan.slags === "abonnement";
+                      const aftale = plan.slags === "aftale";
+                      const koebbar = abn && profil && profil.betalingAktivt && bruger;
+                      return (
                       <div key={plan.noegle} className="rounded-2xl p-5" style={{ border: `1px solid ${LINE}` }}>
                         <div className="flex items-baseline justify-between mb-1">
                           <span className="text-sm" style={{ color: TEXT }}>{plan.navn}</span>
                           <span className="font-display" style={{ fontSize: 20, color: TEXT }}>
+                            {aftale && <span className="text-[11px]" style={{ color: MUTED }}>fra </span>}
                             {plan.kr.toLocaleString("da-DK")} kr
-                            <span className="text-[11px]" style={{ color: MUTED }}> /md</span>
+                            {/* Enkelt er ét køb. Et "/md" der ikke er sandt er den slags
+                                småløgn en kunde opdager på kontoudtoget. */}
+                            {plan.slags !== "engang" &&
+                              <span className="text-[11px]" style={{ color: MUTED }}> /md</span>}
                           </span>
                         </div>
-                        <p className="text-[11px] mb-3" style={{ color: MUTED }}>{plan.beskrivelse}</p>
+                        <p className="text-[11px] mb-1" style={{ color: MUTED }}>{plan.beskrivelse}</p>
+                        <p className="text-[11px] mb-3" style={{ color: MUTED }}>
+                          {plan.inkluderede === 1
+                            ? "1 bolig"
+                            : `${plan.inkluderede} boliger — ${plan.perBolig.toLocaleString("da-DK")} kr per bolig`}
+                        </p>
                         <ul className="mb-4">
                           {plan.punkter.map((pt) => (
                             <li key={pt} className="text-[11px] flex gap-2 mb-1" style={{ color: TEXT }}>
@@ -3339,21 +3399,39 @@ function Rundvis() {
                             </li>
                           ))}
                         </ul>
-                        <button
-                          onClick={() => tegnAbonnement(plan.noegle)}
-                          disabled={portSender || !(profil && profil.betalingAktivt) || !bruger}
-                          className="w-full rounded-full"
-                          style={{ backgroundColor: ACCENT, color: "#fff", padding: "10px 0", fontSize: 13,
-                                   opacity: portSender || !(profil && profil.betalingAktivt) || !bruger ? 0.45 : 1 }}
-                        >
-                          {!bruger ? "Log ind først" : !(profil && profil.betalingAktivt) ? "Åbner snart" : "Vælg " + plan.navn}
-                        </button>
+                        {aftale ? (
+                          KONTAKT_MAIL ? (
+                            <a href={`mailto:${KONTAKT_MAIL}?subject=Rundvis%20K%C3%A6de`}
+                               className="w-full rounded-full block text-center"
+                               style={{ border: `1px solid ${LINE}`, color: TEXT, padding: "10px 0", fontSize: 13 }}>
+                              Skriv til os
+                            </a>
+                          ) : (
+                            <p className="text-[11px] text-center" style={{ color: MUTED, padding: "10px 0" }}>
+                              Aftales direkte
+                            </p>
+                          )
+                        ) : (
+                          <button
+                            onClick={() => tegnAbonnement(plan.noegle)}
+                            disabled={portSender || !koebbar}
+                            className="w-full rounded-full"
+                            style={{ backgroundColor: ACCENT, color: "#fff", padding: "10px 0", fontSize: 13,
+                                     opacity: portSender || !koebbar ? 0.45 : 1 }}
+                          >
+                            {!abn ? "Åbner snart"
+                              : !bruger ? "Log ind først"
+                              : !(profil && profil.betalingAktivt) ? "Åbner snart"
+                              : "Vælg " + plan.navn}
+                          </button>
+                        )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                   <p className="text-[11px] mb-6" style={{ color: MUTED }}>
-                    Basis-videoen er gratis og uden grænse. Priserne er uden moms. Kort, Apple Pay
-                    og MobilePay.
+                    {BILLED_LOFT} billeder per bolig. Flere koster 35 kr stykket, en bolig ud over
+                    det inkluderede 495 kr. Priserne er uden moms. Kort, Apple&nbsp;Pay og MobilePay.
                   </p>
                 </>
               )}
