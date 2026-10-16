@@ -1900,6 +1900,17 @@ function Rundvis() {
   // Sættes af Afbryd. Arbejderne ser den mellem to klip, så det der allerede er i luften bliver
   // færdigt — det er betalt uanset hvad, og et klip vi smider væk er penge vi har brugt på ingenting.
   const hqAfbrudtRef = useRef(false);
+  // Samme kendsgerning to steder, med vilje. Arbejderne læser ref'en, fordi de kører uden for
+  // en render og skal se ændringen med det samme. Knapteksten læser state, fordi en ref ikke
+  // tegner noget om — før var det et tilfælde om teksten skiftede, afhængigt af om noget andet
+  // lige havde sat state.
+  const [hqAfbrudt, setHqAfbrudt] = useState(false);
+  // Hvornår kørslen begyndte, til den procent der kryber. Og de to elementer procenten
+  // skrives direkte ind i, frem for gennem state: tallet skal opdateres flere gange i
+  // sekundet, og hele siden skal ikke tegnes om for at flytte en bjælke.
+  const hqStartTidRef = useRef(0);
+  const hqBjaelkeRef = useRef(null);
+  const hqTalRef = useRef(null);
   const [hqClips, setHqClips] = useState(null); // array of clip URLs, one per still (null = not generated)
   // What each clip's camera actually does, measured once per clip. null = not measured yet.
   const [hqMotion, setHqMotion] = useState(null);
@@ -2026,18 +2037,48 @@ function Rundvis() {
 
   const hqMissing = flythroughStills.filter((_, i) => !(hqClips && hqClips[i])).length;
 
-  // Hvad boksen viser. Færdige rum tælles på hqRoom frem for på hqProgress, fordi den sidste
-  // bliver sat et sted og ikke det andet, og et tal der står stille er værre end intet tal.
+  // HVOR LANGT ER DEN. Vist som procent frem for som "4 af 14 rum", fordi det tal stod stille
+  // i tre minutter ad gangen: seks klip kører samtidig, så de bliver færdige i hold, og
+  // imellem holdene skete der ikke noget på skærmen. En procent der kryber er ikke mere
+  // præcis, men den svarer på det spørgsmål brugeren faktisk stiller — virker den stadig.
+  //
+  // To kilder, og den højeste vinder. Den målte er summen af hvor langt hvert rum er, hvilket
+  // er rigtigt men springvis. Den anden er bare tiden mod det forventede, som kryber jævnt.
+  // Loftet på 99% står til det sidste rum er inde: en bjælke der når 100 og bliver stående er
+  // værre end en der mangler det sidste stykke.
+  const hqProcent = () => {
+    const total = hqProgress.total || 0;
+    if (!total) return 0;
+    let sum = 0;
+    for (let i = 0; i < flythroughStills.length; i++) sum += hqRoomFill(i);
+    const maalt = sum / total;
+    const forventetMs = Math.ceil(total / HQ_CONCURRENCY) * HQ_SECONDS_PER_CLIP * 1000;
+    const tid = hqStartTidRef.current ? (performance.now() - hqStartTidRef.current) / forventetMs : 0;
+    return Math.min(0.99, Math.max(maalt, Math.min(tid, 0.95)));
+  };
+
   const hqFaerdige = Object.values(hqRoom).filter((v) => v === "klar" || v === "fejl").length;
   const hqMinutterTilbage = (() => {
     const i_alt = hqProgress.total || 0;
     if (!i_alt) return null;
     const tilbage = Math.max(0, i_alt - hqFaerdige);
     if (!tilbage) return null;
-    // Resten tager lige så mange hold som der er rum tilbage, delt på hvor mange der kører ad
-    // gangen. Rundet op: at love for lidt er værre end at love for meget her.
     return Math.max(1, Math.ceil((Math.ceil(tilbage / HQ_CONCURRENCY) * HQ_SECONDS_PER_CLIP) / 60));
   })();
+
+  // Bjælken og tallet skrives direkte, to gange i sekundet. Det er rigeligt til at se at der
+  // sker noget, og det koster ikke en gentegning af siden.
+  useEffect(() => {
+    if (hqStatus !== "working") return;
+    const tik = () => {
+      const p = hqProcent();
+      if (hqBjaelkeRef.current) hqBjaelkeRef.current.style.width = `${(p * 100).toFixed(1)}%`;
+      if (hqTalRef.current) hqTalRef.current.textContent = `${Math.round(p * 100)}%`;
+    };
+    tik();
+    const id = setInterval(tik, 500);
+    return () => clearInterval(id);
+  }, [hqStatus, hqProgress.total, flythroughStills.length]);
 
   // Der er penge i luften og resultatet findes kun her i browseren. Lukker nogen fanen midt i,
   // er begge dele væk.
@@ -2673,6 +2714,8 @@ function Rundvis() {
   const runHighQuality = async (onlyIndexes) => {
     if (hqStatus === "working" || flythroughStills.length === 0) return;
     hqAfbrudtRef.current = false;
+    setHqAfbrudt(false);
+    hqStartTidRef.current = performance.now();
     // Clips already produced are already paid for, so a full run only covers what is missing -
     // the room used for the test is not generated and billed a second time.
     // Planen der bestilles efter. Bygget her frem for læst fra flythroughParams, fordi den
@@ -3823,24 +3866,25 @@ function Rundvis() {
 
             <div className="w-full overflow-hidden mb-3"
                  style={{ height: 3, backgroundColor: "rgba(255,255,255,0.18)", borderRadius: 2 }}>
-              <div style={{
-                width: `${Math.round(100 * hqFaerdige / Math.max(1, hqProgress.total))}%`,
+              <div ref={hqBjaelkeRef} style={{
+                width: "0%",
                 height: "100%", backgroundColor: "#fff", borderRadius: 2,
-                transition: "width 600ms ease",
+                transition: "width 600ms linear",
               }} />
             </div>
 
             <p className="text-xs mb-8" style={{ color: "rgba(255,255,255,0.62)" }}>
-              {hqFaerdige} af {hqProgress.total} rum
+              <span ref={hqTalRef}>0%</span>
               {hqMinutterTilbage !== null && ` · cirka ${hqMinutterTilbage} ${hqMinutterTilbage === 1 ? "minut" : "minutter"} tilbage`}
             </p>
 
             <button
-              onClick={() => { hqAfbrudtRef.current = true; }}
+              onClick={() => { hqAfbrudtRef.current = true; setHqAfbrudt(true); }}
+              disabled={hqAfbrudt}
               className="text-xs"
-              style={{ color: hqAfbrudtRef.current ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.55)" }}
+              style={{ color: hqAfbrudt ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.55)" }}
             >
-              {hqAfbrudtRef.current ? "Stopper efter de igangværende rum…" : "Afbryd"}
+              {hqAfbrudt ? "Stopper efter de igangværende rum…" : "Afbryd"}
             </button>
           </div>
         </div>
