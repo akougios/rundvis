@@ -2524,6 +2524,14 @@ function Rundvis() {
         }
         logoRef.current = im;
         setLogoNavn(file.name);
+        // Gemmes på kontoen, så den næste på kontoret ikke skal finde filen frem igen.
+        // Uden login er der ingen konto at gemme på, og så er det bare denne session.
+        if (bruger) {
+          kaldMedAdgang("/api/filer/logo", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ dataUrl: e.target.result, filnavn: file.name }),
+          }, () => {}).catch(() => setLogoFejl("Logoet blev brugt, men kunne ikke gemmes."));
+        }
       };
       im.onerror = () => setLogoFejl("Kunne ikke læse filen. Prøv en PNG, JPG eller SVG.");
       im.src = e.target.result;
@@ -2895,6 +2903,97 @@ function Rundvis() {
 
   // Renders the walkthrough to a downloadable file in the requested aspect ratio. The heavy
   // work happens in exportFlythroughVideo; this only tracks progress and hands back a blob URL.
+  // GEMTE FILER. Logoet hører til kontoret og bliver liggende; videoen hører til en sag og
+  // slettes af sig selv efter tredive dage. Begge kræver login — uden konto er der ingen at
+  // gemme dem for.
+  const [gemteVideoer, setGemteVideoer] = useState([]);
+  const [gemStatus, setGemStatus] = useState("");
+
+  const hentGemteVideoer = async () => {
+    if (!bruger) { setGemteVideoer([]); return; }
+    try {
+      const r = await kaldMedAdgang("/api/filer/video", { method: "GET" }, () => {});
+      const j = await r.json();
+      setGemteVideoer(j.videoer || []);
+    } catch (e) { /* en liste der ikke kan hentes er ikke værd at larme om */ }
+  };
+
+  // Tre skridt, fordi filen er 20-30 MB og Vercel afviser en krop over 4,5 MB før funktionen
+  // bliver kaldt: vi beder om en signeret adresse, lægger filen direkte op hos Supabase, og
+  // registrerer først derefter rækken. Fejler uploaden, ligger der en fil uden række —
+  // spildplads, som oprydningen tager. Omvendt ville give en knap der fejler i hovedet på
+  // mægleren.
+  const gemVideo = async (blob, navn, format) => {
+    if (!bruger) return;
+    setGemStatus("gemmer");
+    try {
+      const a = await kaldMedAdgang("/api/filer/video", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handling: "url", format, boligId: boligIdRef.current }),
+      }, () => {});
+      const { sti, uploadUrl } = await a.json();
+      const up = await fetch(uploadUrl, { method: "PUT", body: blob, headers: { "Content-Type": blob.type || "video/webm" } });
+      if (!up.ok) throw new Error("Uploaden blev afvist.");
+      await kaldMedAdgang("/api/filer/video", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          handling: "registrer", sti, format, bytes: blob.size,
+          boligId: boligIdRef.current,
+          navn: `${(titles.headline || "").trim() || navn} · ${format}`,
+        }),
+      }, () => {});
+      setGemStatus("gemt");
+      hentGemteVideoer();
+    } catch (e) {
+      setGemStatus("fejl");
+    }
+  };
+
+  const hentGemtVideo = async (id) => {
+    try {
+      const r = await kaldMedAdgang("/api/filer/video", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handling: "link", id }),
+      }, () => {});
+      const j = await r.json();
+      if (j.url) window.open(j.url, "_blank");
+    } catch (e) { /* ignoreret */ }
+  };
+
+  const sletGemtVideo = async (id) => {
+    try {
+      await kaldMedAdgang("/api/filer/video", {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      }, () => {});
+      setGemteVideoer((prev) => prev.filter((v) => v.id !== id));
+    } catch (e) { /* ignoreret */ }
+  };
+
+  // Hentes når nogen logger ind. Logoet sættes direkte ind, så det bare er der — et logo man
+  // skal vælge igen hver gang er ikke gemt, det er kun husket.
+  useEffect(() => {
+    if (!bruger) { setGemteVideoer([]); return; }
+    let afbrudt = false;
+    (async () => {
+      try {
+        const r = await kaldMedAdgang("/api/filer/logo", { method: "GET" }, () => {});
+        const j = await r.json();
+        if (afbrudt || !j.logo || !j.logo.url) return;
+        const im = new Image();
+        im.crossOrigin = "anonymous";
+        im.onload = () => {
+          if (afbrudt || !im.naturalWidth) return;
+          logoRef.current = im;
+          setLogoNavn(j.logo.navn || "logo");
+        };
+        im.src = j.logo.url;
+      } catch (e) { /* intet logo gemt endnu er det normale */ }
+      if (!afbrudt) hentGemteVideoer();
+    })();
+    return () => { afbrudt = true; };
+  }, [bruger]);
+
   const handleExport = async (format) => {
     if (exportStatus === "working" || flythroughStills.length === 0) return;
     setExportStatus("working");
@@ -2914,10 +3013,12 @@ function Rundvis() {
         onProgress: setExportProgress,
       });
       const ext = blob.type.indexOf("mp4") !== -1 ? "mp4" : "webm";
-      setExportFile({
-        url: URL.createObjectURL(blob),
-        name: `rundvis-gennemgang-${format.replace(":", "x")}.${ext}`,
-      });
+      const navn = `rundvis-gennemgang-${format.replace(":", "x")}.${ext}`;
+      setExportFile({ url: URL.createObjectURL(blob), name: navn });
+      // Gemmes uden at spørge, hvis man er logget ind. Mægleren har lige ventet ni minutter
+      // og betalt for klippene; at miste resultatet fordi han lukkede fanen er den dyreste
+      // måde at være høflig på. Fejler det, siges det — men eksporten står stadig.
+      gemVideo(blob, navn, format);
       setExportStatus("done");
     } catch (err) {
       setExportError(err.message || "Eksporten fejlede.");
@@ -3630,6 +3731,16 @@ function Rundvis() {
 
                   {exportStatus === "done" && exportFile && (
                     <div>
+                      {bruger && gemStatus === "gemt" && (
+                        <p className="text-[11px] mb-2" style={{ color: MUTED }}>
+                          Gemt under din profil i 30 dage.
+                        </p>
+                      )}
+                      {bruger && gemStatus === "fejl" && (
+                        <p className="text-[11px] mb-2" style={{ color: AMBER }}>
+                          Kunne ikke gemmes under din profil — hent den ned her.
+                        </p>
+                      )}
                       <a href={exportFile.url} download={exportFile.name} className="inline-flex items-center gap-1.5 text-xs" style={{ color: ACCENT }}>
                         <Icon name="arrowDown" size={13} /> Hent {exportFile.name}
                       </a>
@@ -3693,6 +3804,38 @@ function Rundvis() {
               </div>
 
               {profilHenter && !profil && <p className="text-xs" style={{ color: MUTED }}>Henter…</p>}
+
+              {/* GEMTE VIDEOER. Står før planerne, fordi en kunde der åbner menuen midt i en
+                  arbejdsdag leder efter sin video, ikke efter en pris. Fristen skrives ved
+                  hver enkelt: en mægler der tror de ligger her for evigt, oplever sletningen
+                  som et brudt løfte frem for som den oprydning den er. */}
+              {bruger && gemteVideoer.length > 0 && (
+                <div className="mb-8">
+                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>Dine videoer</p>
+                  <div className="flex flex-col gap-2 mb-2">
+                    {gemteVideoer.map((v) => {
+                      const dage = Math.max(0, Math.ceil((new Date(v.udloeber) - Date.now()) / 864e5));
+                      return (
+                        <div key={v.id} className="flex items-center gap-3 rounded-xl px-3 py-2"
+                             style={{ border: `1px solid ${LINE}` }}>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs truncate" style={{ color: TEXT }}>{v.navn || "Video"}</p>
+                            <p className="text-[11px]" style={{ color: MUTED }}>
+                              {v.bytes ? `${Math.round(v.bytes / 1e6)} MB · ` : ""}
+                              {dage === 0 ? "slettes i dag" : `slettes om ${dage} ${dage === 1 ? "dag" : "dage"}`}
+                            </p>
+                          </div>
+                          <button onClick={() => hentGemtVideo(v.id)} className="text-[11px]" style={{ color: ACCENT }}>Hent</button>
+                          <button onClick={() => sletGemtVideo(v.id)} className="text-[11px]" style={{ color: MUTED }}>Slet</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[11px]" style={{ color: MUTED }}>
+                    Videoer gemmes i 30 dage. Hent dem ned hvis du vil beholde dem længere.
+                  </p>
+                </div>
+              )}
 
               {/* NUVÆRENDE PLAN OG FORBRUG. Tallet står før planerne, fordi det er dét en
                   kunde der allerede betaler kom for at se. */}
