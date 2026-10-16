@@ -592,9 +592,19 @@ const GRADE_FILTER = "contrast(1.06) saturate(1.07) brightness(1.01)";
 // grænse der stiltiende smider arbejde væk er værre end ingen grænse.
 const BILLED_LOFT = 14;
 
-// Scenens højde. Fast, så siden ikke flytter sig når man skifter format. Valgt så et bredformat
-// fylder rammen ud på en almindelig skærm; et højformat bliver smalt, hvilket det også er.
-const SCENE_HOEJDE = 480;
+// Scenens højde. Fast for et givet vindue, så siden ikke flytter sig når man skifter format —
+// det er hele pointen med feltet. Men ikke det samme tal på en telefon som på en skærm: 480 px
+// på en iPhone skubber format- og tempoknapperne under kanten, og så kan man ikke se hvad man
+// ændrer mens man ændrer det. Højden følger derfor vinduet, og formatet rører den aldrig.
+//
+// Den samme værdi bruges til bredden af rammen (højde gange formatet), så den skal kunne
+// regnes i JS og ikke kun i CSS.
+const SCENE_MAKS = 480;
+function sceneHoejde() {
+  if (typeof window === "undefined") return SCENE_MAKS;
+  // 380 px er hvad der skal være plads til over og under: trin, afspillerlinje, knaprækken.
+  return Math.max(240, Math.min(SCENE_MAKS, window.innerHeight - 380));
+}
 
 // How many clips are generated at once. One clip takes the model about three minutes whatever
 // we do, so wall-clock time is purely a question of how many run in parallel: at three, 18
@@ -1729,6 +1739,17 @@ function Rundvis() {
   const [titles, setTitles] = useState({ headline: "", agent: "" });
   const [musicName, setMusicName] = useState("");
   const [tempo, setTempo] = useState("normalt");
+  // Måles ved opstart og når vinduet ændrer sig — en telefon der vendes er et nyt vindue.
+  const [sceneH, setSceneH] = useState(() => sceneHoejde());
+  useEffect(() => {
+    const paa = () => setSceneH(sceneHoejde());
+    window.addEventListener("resize", paa);
+    window.addEventListener("orientationchange", paa);
+    return () => {
+      window.removeEventListener("resize", paa);
+      window.removeEventListener("orientationchange", paa);
+    };
+  }, []);
   // Logoet holdes i en ref, fordi hver frame skal kunne tegne det uden at vente på en render,
   // og i state kun som navn, så siden tegner om når der kommer et nyt.
   const logoRef = useRef(null);
@@ -3347,7 +3368,7 @@ function Rundvis() {
                    høj gjorde den dobbelt så høj — og alt under den, knapperne man lige havde
                    trykket på, hoppede ned ad siden. Feltet her er gennemsigtigt og altid lige
                    højt; det er dét der holder siden i ro, ikke rammen. */
-                <div className="mb-3 flex items-center" style={{ height: SCENE_HOEJDE }}>
+                <div className="mb-3 flex items-center" style={{ height: sceneH }}>
                 <div
                   className="relative rounded-xl overflow-hidden"
                   style={{
@@ -3357,7 +3378,7 @@ function Rundvis() {
                     // sidens baggrund og ikke en bjælke. Bredden har et loft på feltets højde
                     // gange formatet, så et bredformat ikke løber ud over spalten og bliver
                     // beskåret — fit-content alene gjorde netop det, 853 px i en spalte på 728.
-                    width: `min(100%, ${Math.round(SCENE_HOEJDE * (Number(previewFormat.split(":")[0]) / Number(previewFormat.split(":")[1])))}px)`,
+                    width: `min(100%, ${Math.round(sceneH * (Number(previewFormat.split(":")[0]) / Number(previewFormat.split(":")[1])))}px)`,
                     boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
                   }}
                 >
@@ -3431,11 +3452,13 @@ function Rundvis() {
                       <button
                         key={f}
                         onClick={() => setPreviewFormat(f)}
-                        className="px-3 py-1.5 rounded-full text-xs whitespace-nowrap transition-colors"
+                        className="px-3 rounded-full text-xs whitespace-nowrap transition-colors"
                         style={{
                           border: `1px solid ${on ? ACCENT : LINE}`,
                           backgroundColor: on ? ACCENT : "transparent",
                           color: on ? "#fff" : MUTED,
+                          // 30 px høje piller er til at ramme med en mus og svære med en finger.
+                          minHeight: 38,
                         }}
                       >
                         {f}
@@ -3453,11 +3476,12 @@ function Rundvis() {
                       <button
                         key={t.id}
                         onClick={() => setTempo(t.id)}
-                        className="px-3 py-1.5 rounded-full text-xs whitespace-nowrap transition-colors"
+                        className="px-3 rounded-full text-xs whitespace-nowrap transition-colors"
                         style={{
                           border: `1px solid ${on ? ACCENT : LINE}`,
                           backgroundColor: on ? ACCENT : "transparent",
                           color: on ? "#fff" : MUTED,
+                          minHeight: 38,
                         }}
                       >
                         {t.navn}
@@ -3562,7 +3586,9 @@ function Rundvis() {
                                   onClick={() => moveShot(i, -1)}
                                   disabled={i === 0}
                                   className="px-2 text-[13px]"
-                                  style={{ color: "#fff", opacity: i === 0 ? 0.3 : 0.9 }}
+                                  // 20 px høj er til en mus. Rummene flyttes rundt på en
+                                  // telefon, og dér er det en finger.
+                                  style={{ color: "#fff", opacity: i === 0 ? 0.3 : 0.9, minHeight: 34, minWidth: 34 }}
                                   aria-label="Flyt tidligere"
                                 >
                                   ←
@@ -3580,7 +3606,7 @@ function Rundvis() {
                                   onClick={() => moveShot(i, 1)}
                                   disabled={i === flythroughStills.length - 1}
                                   className="px-2 text-[13px]"
-                                  style={{ color: "#fff", opacity: i === flythroughStills.length - 1 ? 0.3 : 0.9 }}
+                                  style={{ color: "#fff", opacity: i === flythroughStills.length - 1 ? 0.3 : 0.9, minHeight: 34, minWidth: 34 }}
                                   aria-label="Flyt senere"
                                 >
                                   →
