@@ -3292,21 +3292,21 @@ function Rundvis() {
               )}
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
-                /* EN FAST RAMME, ikke en kasse der skifter form med formatet.
+                /* ET FELT MED FAST HØJDE, og videoen centreret i det.
                    Før havde kassen selv formatets sidelængdeforhold, så et skift fra bred til
                    høj gjorde den dobbelt så høj — og alt under den, knapperne man lige havde
-                   trykket på, hoppede ned ad siden. Nu er rammen lige høj hele tiden og videoen
-                   centreres i den. Et højformat ER smalt; det skal man kunne se uden at resten
-                   af siden flytter sig. */
+                   trykket på, hoppede ned ad siden. Feltet her er gennemsigtigt og altid lige
+                   højt; det er dét der holder siden i ro, ikke rammen. */
+                <div className="mb-3 flex items-center" style={{ height: SCENE_HOEJDE }}>
                 <div
-                  className="relative rounded-xl overflow-hidden mb-3"
+                  className="relative rounded-xl overflow-hidden"
                   style={{
                     backgroundColor: "#000",
-                    height: SCENE_HOEJDE,
-                    // Højden er fast; den er det der bærer resten af siden. Bredden slutter om
-                    // videoen — et højformat skal ikke stå i en halv meter sort — men med et
-                    // loft, så et bredformat ikke løber ud over spalten og bliver beskåret.
-                    // fit-content alene gjorde netop det: 853 px lærred i en ramme på 728.
+                    // Ingen højde her. Rammen får sin af videoen indeni, så der aldrig står
+                    // sort under billedet: 16:9 er lavere end feltet, og den forskel skal være
+                    // sidens baggrund og ikke en bjælke. Bredden har et loft på feltets højde
+                    // gange formatet, så et bredformat ikke løber ud over spalten og bliver
+                    // beskåret — fit-content alene gjorde netop det, 853 px i en spalte på 728.
                     width: `min(100%, ${Math.round(SCENE_HOEJDE * (Number(previewFormat.split(":")[0]) / Number(previewFormat.split(":")[1])))}px)`,
                     boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
                   }}
@@ -3335,6 +3335,7 @@ function Rundvis() {
                     logo={logoNavn ? logoRef.current : null}
                     clockRef={clockRef}
                   />
+                </div>
                 </div>
                 </div>
               )}
