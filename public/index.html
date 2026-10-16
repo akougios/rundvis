@@ -578,6 +578,18 @@ const GRADE_FILTER = "contrast(1.06) saturate(1.07) brightness(1.01)";
 // grænse der stiltiende smider arbejde væk er værre end ingen grænse.
 const BILLED_LOFT = 14;
 
+// How many clips are generated at once. One clip takes the model about three minutes whatever
+// we do, so wall-clock time is purely a question of how many run in parallel: at three, 18
+// photos is ~18 minutes, at six it is ~9. Six is not reckless because create.js treats a 429
+// as normal and waits it out - submitting more than the account allows degrades into queueing
+// rather than failing, which is the behaviour we want.
+//
+// Står uden for komponenten, fordi tallene læses mens der RENDERES — boksen under opgraderingen
+// regner minutter tilbage af dem. En const inde i komponenten er ikke klar på det tidspunkt.
+const HQ_CONCURRENCY = 6;
+// Rough seconds per clip, for the estimates shown before the agent commits to paying.
+const HQ_SECONDS_PER_CLIP = 180;
+
 // Kæde-niveauet forhandles, så der er ingen knap der kan sælge det. Står her tom, fordi en
 // mailadresse er en beslutning om hvem der tager telefonen — sæt den, og kortet bliver et
 // mailto-link i stedet for en linje tekst.
@@ -1828,6 +1840,9 @@ function Rundvis() {
   const [hqTick, setHqTick] = useState(0);
   const hqStartedRef = useRef({});
   const [hqError, setHqError] = useState("");
+  // Sættes af Afbryd. Arbejderne ser den mellem to klip, så det der allerede er i luften bliver
+  // færdigt — det er betalt uanset hvad, og et klip vi smider væk er penge vi har brugt på ingenting.
+  const hqAfbrudtRef = useRef(false);
   const [hqClips, setHqClips] = useState(null); // array of clip URLs, one per still (null = not generated)
   // What each clip's camera actually does, measured once per clip. null = not measured yet.
   const [hqMotion, setHqMotion] = useState(null);
@@ -1954,6 +1969,35 @@ function Rundvis() {
 
   const hqMissing = flythroughStills.filter((_, i) => !(hqClips && hqClips[i])).length;
 
+  // Hvad boksen viser. Færdige rum tælles på hqRoom frem for på hqProgress, fordi den sidste
+  // bliver sat et sted og ikke det andet, og et tal der står stille er værre end intet tal.
+  const hqFaerdige = Object.values(hqRoom).filter((v) => v === "klar" || v === "fejl").length;
+  const hqMinutterTilbage = (() => {
+    const i_alt = hqProgress.total || 0;
+    if (!i_alt) return null;
+    const tilbage = Math.max(0, i_alt - hqFaerdige);
+    if (!tilbage) return null;
+    // Resten tager lige så mange hold som der er rum tilbage, delt på hvor mange der kører ad
+    // gangen. Rundet op: at love for lidt er værre end at love for meget her.
+    return Math.max(1, Math.ceil((Math.ceil(tilbage / HQ_CONCURRENCY) * HQ_SECONDS_PER_CLIP) / 60));
+  })();
+
+  // Der er penge i luften og resultatet findes kun her i browseren. Lukker nogen fanen midt i,
+  // er begge dele væk.
+  useEffect(() => {
+    if (hqStatus !== "working") return;
+    const advar = (e) => { e.preventDefault(); e.returnValue = ""; return ""; };
+    window.addEventListener("beforeunload", advar);
+    return () => window.removeEventListener("beforeunload", advar);
+  }, [hqStatus]);
+
+  // Intet spiller mens der arbejdes. Filmen står stille bag sløringen, og musikken med den.
+  useEffect(() => {
+    if (hqStatus !== "working") return;
+    setClock({ playing: false });
+    setPlaying(false);
+  }, [hqStatus]);
+
   // Time and money for a given number of clips, so neither is a surprise after the click.
   const hqEstimate = (n) => ({
     usd: (QUALITIES[hqQuality].usd * n).toFixed(2),
@@ -1968,6 +2012,11 @@ function Rundvis() {
     return n;
   };
   const reorderShot = (from, to) => {
+    // Arbejderpuljen holder på et INDEKS og skriver klippet tilbage i clips[i] når det er
+    // færdigt. Flyttes eller fjernes et rum undervejs, peger de indekser på andre rum, og
+    // køkkenets klip lander på soveværelset. Skærmen er låst imens, så det her er kun
+    // bagstopperen.
+    if (hqStatus === "working") return;
     if (from === to || from < 0 || to < 0) return;
     if (from >= flythroughStills.length || to >= flythroughStills.length) return;
     setFlythroughStills((prev) => lift(prev, from, to));
@@ -1992,6 +2041,11 @@ function Rundvis() {
   };
 
   const moveShot = (idx, dir) => {
+    // Arbejderpuljen holder på et INDEKS og skriver klippet tilbage i clips[i] når det er
+    // færdigt. Flyttes eller fjernes et rum undervejs, peger de indekser på andre rum, og
+    // køkkenets klip lander på soveværelset. Skærmen er låst imens, så det her er kun
+    // bagstopperen.
+    if (hqStatus === "working") return;
     const target = idx + dir;
     if (target < 0 || target >= flythroughStills.length) return;
     setFlythroughStills((prev) => swap(prev, idx, target));
@@ -2005,6 +2059,11 @@ function Rundvis() {
 
   // Same reasoning for removing a shot: drop the photo and its clip together.
   const removeShot = (idx) => {
+    // Arbejderpuljen holder på et INDEKS og skriver klippet tilbage i clips[i] når det er
+    // færdigt. Flyttes eller fjernes et rum undervejs, peger de indekser på andre rum, og
+    // køkkenets klip lander på soveværelset. Skærmen er låst imens, så det her er kun
+    // bagstopperen.
+    if (hqStatus === "working") return;
     if (flythroughStills.length <= 3) return; // three is the minimum a walkthrough is built from
     const drop = (arr) => arr.filter((_, i) => i !== idx);
     setFlythroughStills(drop);
@@ -2209,15 +2268,6 @@ function Rundvis() {
   // 20, not 8. A real listing video runs 40-50 seconds, and at this edit's pace that is 16-20
   // shots - the reference film the agent supplied had 14 clips across 40.7s. Eight photos made
   // a 20-second video, which is short for a property.
-
-  // How many clips are generated at once. One clip takes the model about three minutes whatever
-  // we do, so wall-clock time is purely a question of how many run in parallel: at three, 18
-  // photos is ~18 minutes, at six it is ~9. Six is not reckless because create.js treats a 429
-  // as normal and waits it out - submitting more than the account allows degrades into queueing
-  // rather than failing, which is the behaviour we want.
-  const HQ_CONCURRENCY = 6;
-  // Rough seconds per clip, for the estimates shown before the agent commits to paying.
-  const HQ_SECONDS_PER_CLIP = 180;
 
   // Photos are kept at up to this size. A 1920-wide export at the tightest 10% crop samples at
   // most ~2130 source pixels across, so 2560 leaves headroom while keeping several photos in
@@ -2558,6 +2608,7 @@ function Rundvis() {
 
   const runHighQuality = async (onlyIndexes) => {
     if (hqStatus === "working" || flythroughStills.length === 0) return;
+    hqAfbrudtRef.current = false;
     // Clips already produced are already paid for, so a full run only covers what is missing -
     // the room used for the test is not generated and billed a second time.
     const clips = hqClips ? hqClips.slice() : new Array(flythroughStills.length).fill(null);
@@ -2669,6 +2720,9 @@ function Rundvis() {
       let stoppet = false;
       const arbejder = async () => {
         while (koe.length) {
+          // Afbryd ses MELLEM to klip, ikke midt i et. Et klip der allerede er bestilt hos Luma
+          // er betalt, så vi lader det blive færdigt frem for at smide det væk.
+          if (hqAfbrudtRef.current) { stoppet = true; break; }
           const i = koe.shift();
           startedAt[i] = performance.now();
           setHqRoom((prev) => ({ ...prev, [i]: "igang" }));
@@ -2713,6 +2767,11 @@ function Rundvis() {
         setHqStatus(clips.some(Boolean) ? "done" : "error");
       } else {
         setHqStatus("done");
+        // Afsløringen. Boksen går væk og det opgraderede står der — ikke en fane man selv skal
+        // finde bagefter.
+        setShowSource("upgraded");
+        setClock({ playing: true, baseMs: 0 });
+        setPlaying(true);
       }
     } catch (err) {
       setHqError(err.message || "Genereringen fejlede.");
@@ -3643,6 +3702,52 @@ function Rundvis() {
                 Log ud
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MENS DER OPGRADERES er skærmen lukket. Ikke for at være streng: arbejderpuljen holder
+          på indekser, så flytter nogen rundt på rummene undervejs, lander klippene på de
+          forkerte. Og der er ni minutter at vente i — det er bedre brugt på at vente end på at
+          rode, og afsløringen bagefter er stærkere når man ikke har set den blive til.
+
+          Men ikke en bar spinner. Ni minutters uoplyst venten læses som at siden er gået ned,
+          og så lukker nogen fanen midt i noget de har betalt for. Derfor står der hvor langt
+          der er, og hvor længe der er igen. */}
+      {hqStatus === "working" && (
+        <div
+          className="fixed inset-0 flex items-center justify-center px-5"
+          style={{ backgroundColor: "rgba(23,27,26,0.82)", zIndex: 60, backdropFilter: "blur(10px)" }}
+        >
+          <div className="w-full text-center" style={{ maxWidth: 380 }}>
+            <p className="font-display mb-2" style={{ fontSize: 28, color: "#fff" }}>
+              Videoen forbedres
+            </p>
+            <p className="text-sm mb-7" style={{ color: "rgba(255,255,255,0.62)" }}>
+              Kameraet sættes i bevægelse i hvert rum.
+            </p>
+
+            <div className="w-full overflow-hidden mb-3"
+                 style={{ height: 3, backgroundColor: "rgba(255,255,255,0.18)", borderRadius: 2 }}>
+              <div style={{
+                width: `${Math.round(100 * hqFaerdige / Math.max(1, hqProgress.total))}%`,
+                height: "100%", backgroundColor: "#fff", borderRadius: 2,
+                transition: "width 600ms ease",
+              }} />
+            </div>
+
+            <p className="text-xs mb-8" style={{ color: "rgba(255,255,255,0.62)" }}>
+              {hqFaerdige} af {hqProgress.total} rum
+              {hqMinutterTilbage !== null && ` · cirka ${hqMinutterTilbage} ${hqMinutterTilbage === 1 ? "minut" : "minutter"} tilbage`}
+            </p>
+
+            <button
+              onClick={() => { hqAfbrudtRef.current = true; }}
+              className="text-xs"
+              style={{ color: hqAfbrudtRef.current ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.55)" }}
+            >
+              {hqAfbrudtRef.current ? "Stopper efter de igangværende rum…" : "Afbryd"}
+            </button>
           </div>
         </div>
       )}
