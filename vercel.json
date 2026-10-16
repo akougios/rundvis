@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/filer/ryd",
+      "path": "/api/filer?hvad=ryd",
       "schedule": "17 3 * * *"
     }
   ]
