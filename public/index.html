@@ -1144,6 +1144,7 @@ function Icon({ name, size = 16, className = "", style = {} }) {
     case "loader": return <svg {...p} className={"spin " + className}><circle cx="12" cy="12" r="9" strokeDasharray="40 20" /></svg>;
     case "film": return <svg {...p}><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="7" y1="3" x2="7" y2="21" /><line x1="17" y1="3" x2="17" y2="21" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="3" y1="15" x2="21" y2="15" /></svg>;
     case "volume": return <svg {...p}><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M18.5 5.5a9 9 0 0 1 0 13" /></svg>;
+    case "share": return <svg {...p}><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7" /><path d="M12 3v13" /><path d="m7 8 5-5 5 5" /></svg>;
     case "music": return <svg {...p}><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></svg>;
     default: return null;
   }
@@ -3802,9 +3803,9 @@ function Rundvis() {
                       <div className="flex flex-wrap items-center gap-2 mt-3">
                         {kanDeleFil(exportFile.blob && new File([exportFile.blob], exportFile.name, { type: exportFile.blob.type || "video/webm" })) && (
                           <button onClick={delVideo}
-                            className="px-3 py-1.5 rounded-full text-xs"
+                            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs"
                             style={{ backgroundColor: ACCENT, color: "#fff" }}>
-                            Del video
+                            <Icon name="share" size={13} /> Send til Instagram, TikTok…
                           </button>
                         )}
                         {PLATFORME.map((pf) => (
@@ -3816,8 +3817,11 @@ function Rundvis() {
                         ))}
                       </div>
                       <p className="text-[10px] mt-2" style={{ color: MUTED }}>
-                        Instagram, TikTok og Facebook henter videoen ned og åbner siden, hvor du
-                        lægger den op. De tillader ikke at en hjemmeside sender videoen direkte.
+                        {kanDeleFil(exportFile.blob && new File([exportFile.blob], exportFile.name, { type: exportFile.blob.type || "video/webm" }))
+                          ? "Vælg Instagram eller TikTok i menuen — videoen følger med og er klar til at lægge op."
+                          : bruger
+                            ? "På computer kan videoen ikke sendes direkte til apperne. Knapperne henter den ned og åbner siden. Vil du poste fra telefonen, ligger videoen under din profil i 30 dage — åbn Rundvis på telefonen og send den derfra."
+                            : "På computer kan videoen ikke sendes direkte til apperne. Knapperne henter den ned og åbner siden, hvor du lægger den op."}
                       </p>
                       {exportFile.name.endsWith(".webm") && (
                         <p className="text-[10px] mt-1" style={{ color: MUTED }}>
