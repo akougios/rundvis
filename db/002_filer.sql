@@ -64,9 +64,10 @@ create policy gemt_video_slet on gemt_video for delete using (konto_id in (selec
 -- Men ikke skrive. Rækken oprettes af serveren med service-nøglen samtidig med at filen
 -- lægges op, så en række aldrig kan pege på en fil der ikke findes — eller på en andens.
 
--- Filerne i bucket'en: læsning gennem signerede links fra serveren, så der er ingen
--- browser-politik at skrive. Skrivning sker udelukkende med service-nøglen.
-drop policy if exists rundvis_ingen_browser on storage.objects;
+-- Der skrives bevidst INGEN politik på storage.objects. Browseren rører aldrig bucket'en:
+-- den lægger op gennem en signeret adresse og læser gennem et signeret link, begge udstedt
+-- af serveren med service-nøglen. Uden en politik er bucket'en lukket for alle andre, og det
+-- er præcis det vi vil have.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Oprydningen. Kaldes af /api/filer/ryd én gang i døgnet.
