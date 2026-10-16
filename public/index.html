@@ -615,6 +615,29 @@ const GRADE_WARM = "rgba(255, 216, 170, 0.10)";
 // read as a slideshow: correct on the beat, but with no shape over the two minutes.
 //
 // Held to half-beats, which are still on the music.
+// HVILKE TRÆK DER VISER AT KLIPPET ER AI.
+//
+// Et smalt, dybt rum filmet lige ned ad sin egen akse udvider sig radialt fra midten når
+// kameraet kører fremad — nøjagtig som et zoom gør det. Målt på en rigtig køkkenoptagelse lå
+// hele den ikke-zoom-forklarede bevægelse langs de nære skabe i venstre og højre kant, mens
+// døren i midten var ren zoom. Klippet var ægte og betalt, og det lignede den gratis udgave.
+//
+// Jeg prøvede først at finde den slags rum på FOTOET — forsvindingspunkt og spejling. Det
+// skilte dem ikke ad: køkkenet scorede 0,34 på forsvindingspunkt mod badeværelsets 0,43, altså
+// den forkerte vej. Dybdestruktur er ikke til at læse ud af et enkelt billede med kantmålinger.
+//
+// Så i stedet en regel der ikke kræver at vi genkender rummet. Hvad 2D kan efterligne:
+//
+//   push, drift   2D laver et zoom. AI laver en dolly. I et dybt rum er de ikke til at skelne.
+//   lean          2D laver zoom med vip. AI vipper rigtigt. Nogen forskel.
+//   pan, orbit    2D skubber udsnittet sidelæns. AI flytter kameraet sidelæns, og parallaksen
+//                 lander tværs OVER midten af billedet, hvor øjet er. Her kan 2D ikke følge med.
+//
+// Så når et rum skal have et AI-klip, foretrækkes pan og orbit. Det koster ingenting — det er
+// samme antal klip — og det er forskellen på en opgradering man kan se og en man betaler for.
+// Den gratis udgave beholder alle fem træk; den har ingenting at bevise.
+const LATERALE = ["pan", "orbit"];
+
 // TEMPO. En faktor på alle takter, ikke en afspilningshastighed.
 //
 // Et bånd der kørte filmen hurtigere ville også flytte klippene væk fra takten, og hele
@@ -683,7 +706,7 @@ const CLIP_MIN_BEATS = 4;
 // clipMotion(i) -> { start, moving } in seconds, from measureClipMotion, or null when the shot has
 // no clip or it has not been measured yet. Unmeasured is treated as no clip: the shot keeps its
 // arc length and the clip, if any, plays from its start. That is the safe direction to be wrong in.
-function buildEditPlan(count, clipMotion, tempo = 1) {
+function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false) {
   if (count === 0) return [];
   const beats = (n) => Math.round(n * BEAT_MS);
   const motionAt = typeof clipMotion === "function" ? clipMotion : () => null;
@@ -739,7 +762,14 @@ function buildEditPlan(count, clipMotion, tempo = 1) {
       // less varied than the fixed cycle this replaced. Falls back to the looser set when
       // being this picky leaves nothing.
       const fresh = legal.filter((m) => recent.indexOf(m) === -1);
-      const pool = fresh.length ? fresh : legal;
+      let pool = fresh.length ? fresh : legal;
+      // Skal rummet have et AI-klip, så vælg blandt de sidelæns træk hvis der er nogen tilbage
+      // efter reglerne ovenfor. Er der ikke, gælder den almindelige pulje — en gentagelse er
+      // værre end et træk der ikke viser sig frem.
+      if (tilKlip) {
+        const lateral = pool.filter((m) => LATERALE.indexOf(m) !== -1);
+        if (lateral.length) pool = lateral;
+      }
       type = pool[Math.floor(seededRandom(i * 7.13 + 2.7) * pool.length) % pool.length];
       nBeats = paceBeats(i, count, tempo);
 
@@ -2463,6 +2493,12 @@ function Rundvis() {
   // see the clips would feed it its own output - lengthening a shot would change which shots look
   // worth upgrading next, and the "selected rooms" list would reshuffle under the agent between
   // one click and the next.
+  // Sandt når filmen HAR klip. Ikke "er ved at få dem": planen ville så skifte midt i kørslen,
+  // og arbejderne læser trækket når de sender kaldet afsted. Vi ville bede Luma om ét træk og
+  // vise et andet. runHighQuality bygger i stedet sin egen plan med flaget sat, så det der
+  // bestilles og det der vises er det samme — fra det øjeblik der er klip at vise.
+  const vilHaveKlip = Boolean(hqClips && hqClips.some(Boolean));
+
   const basePlan = useMemo(
     () => buildEditPlan(flythroughStills.length, null, tempoFaktor(tempo)),
     [flythroughStills.length, tempo]
@@ -2471,8 +2507,9 @@ function Rundvis() {
     .map((m) => (m ? `${m.start.toFixed(2)},${m.moving.toFixed(2)}` : "-"))
     .join("|");
   const flythroughParams = useMemo(
-    () => buildEditPlan(flythroughStills.length, (i) => (hqMotion && hqMotion[i]) || null, tempoFaktor(tempo)),
-    [flythroughStills.length, motionSignature, tempo]
+    () => buildEditPlan(flythroughStills.length, (i) => (hqMotion && hqMotion[i]) || null,
+                        tempoFaktor(tempo), vilHaveKlip),
+    [flythroughStills.length, motionSignature, tempo, vilHaveKlip]
   );
 
   // The scrubber is moved by writing to the element directly. Driving it from state would
@@ -2611,6 +2648,11 @@ function Rundvis() {
     hqAfbrudtRef.current = false;
     // Clips already produced are already paid for, so a full run only covers what is missing -
     // the room used for the test is not generated and billed a second time.
+    // Planen der bestilles efter. Bygget her frem for læst fra flythroughParams, fordi den
+    // memo først får flaget når det første klip er landet — og da er kaldene sendt.
+    const planTilKlip = buildEditPlan(
+      flythroughStills.length, (i) => (hqMotion && hqMotion[i]) || null, tempoFaktor(tempo), true,
+    );
     const clips = hqClips ? hqClips.slice() : new Array(flythroughStills.length).fill(null);
     while (clips.length < flythroughStills.length) clips.push(null);
     const indexes = (onlyIndexes || flythroughStills.map((_, i) => i)).filter((i) => !clips[i]);
@@ -2658,11 +2700,11 @@ function Rundvis() {
 
         const payload = JSON.stringify({
           imageUrl: upJson.url,
-          motion: flythroughParams[i] ? flythroughParams[i].type : "push",
+          motion: planTilKlip[i] ? planTilKlip[i].type : "pan",
           // The edit alternates direction shot by shot. Without this the model was told only
           // "pan" and defaulted left every time, so an upgraded property came back with less
           // variation than the free version it replaced.
-          dir: flythroughParams[i] ? flythroughParams[i].dirSign : 1,
+          dir: planTilKlip[i] ? planTilKlip[i].dirSign : 1,
           // Generate natively in the shape the video will be shown in, rather than cropping a
           // widescreen clip down afterwards - on the models that support it.
           aspectRatio: previewFormat,
