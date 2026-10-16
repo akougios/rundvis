@@ -469,7 +469,13 @@ function clipStartFor(shot) {
   return Math.max(0, Math.min(want, clip - hold));
 }
 
-function syncShowVideos(shots, idx, localMs, prevIdx) {
+// STÅR FILMEN STILLE, skal klippet også stå stille.
+//
+// Før blev videoen holdt kørende og kun hevet tilbage når den var drevet mere end 0,34 sekunder
+// fra det sted filmens ur pegede på. Med uret på pause stod "det sted" fast, mens videoen kørte
+// videre — så den spillede en tredjedel sekund frem, sprang tilbage, spillede frem igen. Det er
+// hakket man så på det billede man havde pauset på.
+function syncShowVideos(shots, idx, localMs, prevIdx, koerer = true) {
   for (let i = 0; i < shots.length; i++) {
     const v = shots[i].video;
     if (!v) continue;
@@ -484,6 +490,14 @@ function syncShowVideos(shots, idx, localMs, prevIdx) {
     const into = outgoing ? shot.spec.durationMs + localMs : localMs;
     const want = Math.min(from + into / 1000, Math.max(0, (v.duration || 99) - 0.05));
     try {
+      if (!koerer) {
+        // Pauset: sæt den ét sted og lad den ligge. Tærsklen er stram her, fordi der ikke er
+        // nogen bevægelse til at skjule et spring — men uden den ville vi sætte currentTime
+        // hver eneste frame, hvilket er sin egen slags uro.
+        if (!v.paused) v.pause();
+        if (Math.abs(v.currentTime - want) > 0.02) v.currentTime = want;
+        continue;
+      }
       if (v.paused) {
         v.currentTime = want;
         const p = v.play();
@@ -577,6 +591,10 @@ const GRADE_FILTER = "contrast(1.06) saturate(1.07) brightness(1.01)";
 // Den skal SIGES. Der lå før en grænse på 20 i filvælgeren som ingen steder stod skrevet, og en
 // grænse der stiltiende smider arbejde væk er værre end ingen grænse.
 const BILLED_LOFT = 14;
+
+// Scenens højde. Fast, så siden ikke flytter sig når man skifter format. Valgt så et bredformat
+// fylder rammen ud på en almindelig skærm; et højformat bliver smalt, hvilket det også er.
+const SCENE_HOEJDE = 480;
 
 // How many clips are generated at once. One clip takes the model about three minutes whatever
 // we do, so wall-clock time is purely a question of how many run in parallel: at three, 18
@@ -1057,7 +1075,8 @@ function composeShowFrame(octx, W, H, shots, tMs, opts) {
 
   // Done here rather than by each caller, so the preview and the export stay in lockstep.
   const fadeNow = (shot.spec.transitionMs || 0) > 0 && local < (shot.spec.transitionMs || 0) && shots.length > 1;
-  syncShowVideos(shots, idx, local, fadeNow ? (idx - 1 + shots.length) % shots.length : -1);
+  syncShowVideos(shots, idx, local, fadeNow ? (idx - 1 + shots.length) % shots.length : -1,
+                 !opts || opts.koerer !== false);
 
   octx.globalAlpha = 1;
   // Contrast and saturation ride on the draw itself, so a dissolve grades both shots identically
@@ -1322,6 +1341,10 @@ function FlythroughStage({ stills, specs, clips, onError, titles, logo, clockRef
     let raf = 0;
 
     const out = document.createElement("canvas");
+    // Lærredet beholder sit eget sidelængdeforhold. Før stod der 100% på begge led, så når
+    // rammen var bredere end formatet blev billedet trukket ud på den ene led. Med auto og to
+    // lofter passer det ind i rammen uden at blive forvrænget — samme virkning som
+    // object-fit: contain, men på et lærred, hvor dets egne width/height er det der tæller.
     out.style.width = "100%";
     out.style.height = "100%";
     out.style.display = "block";
@@ -1395,7 +1418,11 @@ function FlythroughStage({ stills, specs, clips, onError, titles, logo, clockRef
         const tMs = c
           ? (c.playing ? c.baseMs + (performance.now() - c.since) : c.baseMs)
           : performance.now() - t0;
-        composeShowFrame(octx, W, H, shots, tMs, { titles: titlesRef.current, logo: logoRef.current });
+        const ur = clockRef && clockRef.current;
+        composeShowFrame(octx, W, H, shots, tMs, {
+          titles: titlesRef.current, logo: logoRef.current,
+          koerer: ur ? ur.playing !== false : true,
+        });
       };
       raf = requestAnimationFrame(tick);
     };
@@ -3121,13 +3148,31 @@ function Rundvis() {
               )}
 
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
+                /* EN FAST RAMME, ikke en kasse der skifter form med formatet.
+                   Før havde kassen selv formatets sidelængdeforhold, så et skift fra bred til
+                   høj gjorde den dobbelt så høj — og alt under den, knapperne man lige havde
+                   trykket på, hoppede ned ad siden. Nu er rammen lige høj hele tiden og videoen
+                   centreres i den. Et højformat ER smalt; det skal man kunne se uden at resten
+                   af siden flytter sig. */
                 <div
-                  className="relative rounded-xl overflow-hidden mb-3 w-full"
+                  className="relative rounded-xl overflow-hidden mb-3 w-full flex items-center justify-center"
                   style={{
                     backgroundColor: "#000",
-                    aspectRatio: previewFormat.replace(":", "/"),
-                    maxWidth: previewFormat === "9:16" ? 460 : "100%",
+                    height: SCENE_HOEJDE,
                     boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
+                  }}
+                >
+                {/* Bredden styrer, og loftet er rammens højde gange formatet. Så bliver højden
+                    udledt af sidelængdeforholdet og kan aldrig overstige rammen: bredformat
+                    fylder bredden ud og bliver lavere end rammen, højformat rammer højden og
+                    bliver smalt. Den omvendte vej — højden styrer, bredden får et loft — holder
+                    ikke, for et loft på bredden udleder ikke en ny højde. */}
+                <div
+                  className="relative"
+                  style={{
+                    width: "100%",
+                    maxWidth: SCENE_HOEJDE * (Number(previewFormat.split(":")[0]) / Number(previewFormat.split(":")[1])),
+                    aspectRatio: previewFormat.replace(":", "/"),
                   }}
                 >
                   <FlythroughStage
@@ -3140,6 +3185,7 @@ function Rundvis() {
                     logo={logoNavn ? logoRef.current : null}
                     clockRef={clockRef}
                   />
+                </div>
                 </div>
               )}
 
