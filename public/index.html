@@ -2994,6 +2994,49 @@ function Rundvis() {
     return () => { afbrudt = true; };
   }, [bruger]);
 
+  // DELING.
+  //
+  // Der findes ingen måde at lægge en video på Instagram, TikTok eller Facebook ved at trykke
+  // på en knap i en hjemmeside. De tre har hver sit API, og alle tre kræver det samme: en
+  // registreret app, erhvervskonto hos kunden, og at kunden logger ind og giver os lov. Det er
+  // en integration, ikke en knap, og den kan først bygges når der er kunder at bygge den for.
+  //
+  // Det der FAKTISK virker, er styresystemets egen delemenu. På en telefon åbner den med
+  // Instagram og TikTok i listen, og videoen følger med — altså præcis den ene handling du
+  // ville have. Derfor er det den primære knap når browseren kan det.
+  //
+  // Kan den ikke — og det kan en pc som regel ikke — henter vi filen og åbner platformens egen
+  // side, så mægleren kun skal trække filen ind. Det er to skridt i stedet for ét, men det er
+  // ærligt, og det virker i dag.
+  const kanDeleFil = (fil) => {
+    try {
+      return Boolean(navigator.canShare && fil && navigator.canShare({ files: [fil] }));
+    } catch (e) { return false; }
+  };
+
+  const delVideo = async () => {
+    if (!exportFile || !exportFile.blob) return;
+    const fil = new File([exportFile.blob], exportFile.name, { type: exportFile.blob.type || "video/webm" });
+    if (!kanDeleFil(fil)) return;
+    try {
+      await navigator.share({ files: [fil], title: titles.headline || "Boligvideo" });
+    } catch (e) { /* afbrudt af brugeren er ikke en fejl */ }
+  };
+
+  const PLATFORME = [
+    { id: "instagram", navn: "Instagram", url: "https://www.instagram.com/" },
+    { id: "tiktok", navn: "TikTok", url: "https://www.tiktok.com/upload" },
+    { id: "facebook", navn: "Facebook", url: "https://www.facebook.com/" },
+  ];
+
+  const aabnPlatform = (p) => {
+    // Filen hentes først. Åbner vi bare siden, står mægleren med en upload-knap og ingen fil.
+    const a = document.createElement("a");
+    a.href = exportFile.url; a.download = exportFile.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    window.open(p.url, "_blank", "noopener");
+  };
+
   const handleExport = async (format) => {
     if (exportStatus === "working" || flythroughStills.length === 0) return;
     setExportStatus("working");
@@ -3014,7 +3057,13 @@ function Rundvis() {
       });
       const ext = blob.type.indexOf("mp4") !== -1 ? "mp4" : "webm";
       const navn = `rundvis-gennemgang-${format.replace(":", "x")}.${ext}`;
-      setExportFile({ url: URL.createObjectURL(blob), name: navn });
+      const url = URL.createObjectURL(blob);
+      setExportFile({ url, name: navn, blob });
+      // Knappen siger "Hent", så filen hentes. Før skulle man trykke to gange: én gang på
+      // knappen for at bygge filen, og én gang på linket for at få den.
+      const a = document.createElement("a");
+      a.href = url; a.download = navn;
+      document.body.appendChild(a); a.click(); a.remove();
       // Gemmes uden at spørge, hvis man er logget ind. Mægleren har lige ventet ni minutter
       // og betalt for klippene; at miste resultatet fordi han lukkede fanen er den dyreste
       // måde at være høflig på. Fejler det, siges det — men eksporten står stadig.
@@ -3710,7 +3759,7 @@ function Rundvis() {
                       cursor: exportStatus === "working" ? "not-allowed" : "pointer",
                     }}
                   >
-                    Hent video
+                    {bruger ? "Hent og gem video" : "Hent video"}
                   </button>
 
                   {exportStatus === "working" && (
@@ -3742,9 +3791,34 @@ function Rundvis() {
                           Kunne ikke gemmes under din profil — hent den ned her.
                         </p>
                       )}
-                      <a href={exportFile.url} download={exportFile.name} className="inline-flex items-center gap-1.5 text-xs" style={{ color: ACCENT }}>
-                        <Icon name="arrowDown" size={13} /> Hent {exportFile.name}
+                      <a href={exportFile.url} download={exportFile.name}
+                         className="inline-flex items-center gap-1.5 text-xs" style={{ color: ACCENT }}>
+                        <Icon name="arrowDown" size={13} />
+                        Hent igen
                       </a>
+
+                      {/* Delemenuen først, hvor den findes: dér er det ét tryk til Instagram.
+                          Ellers de tre genveje, som henter filen og åbner siden. */}
+                      <div className="flex flex-wrap items-center gap-2 mt-3">
+                        {kanDeleFil(exportFile.blob && new File([exportFile.blob], exportFile.name, { type: exportFile.blob.type || "video/webm" })) && (
+                          <button onClick={delVideo}
+                            className="px-3 py-1.5 rounded-full text-xs"
+                            style={{ backgroundColor: ACCENT, color: "#fff" }}>
+                            Del video
+                          </button>
+                        )}
+                        {PLATFORME.map((pf) => (
+                          <button key={pf.id} onClick={() => aabnPlatform(pf)}
+                            className="px-3 py-1.5 rounded-full text-xs"
+                            style={{ border: `1px solid ${LINE}`, color: TEXT }}>
+                            {pf.navn}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] mt-2" style={{ color: MUTED }}>
+                        Instagram, TikTok og Facebook henter videoen ned og åbner siden, hvor du
+                        lægger den op. De tillader ikke at en hjemmeside sender videoen direkte.
+                      </p>
                       {exportFile.name.endsWith(".webm") && (
                         <p className="text-[10px] mt-1" style={{ color: MUTED }}>
                           Din browser optager i WebM. Konvertér til MP4 hvis modtageren kræver det.
