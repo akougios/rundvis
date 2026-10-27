@@ -524,6 +524,24 @@ function syncShowVideos(shots, idx, localMs, prevIdx, koerer = true) {
     const v = shots[i].video;
     if (!v) continue;
     const outgoing = prevIdx === i && i !== idx;
+    // DET NÆSTE KLIP SØGES PÅ PLADS I FORVEJEN.
+    //
+    // Et video-element søger asynkront. Blev currentTime først sat i det øjeblik skuddet gik i
+    // gang - som nedenfor - nåede søgningen ikke at lande før der blev tegnet, og den første
+    // frame af skuddet viste dér hvor klippet tilfældigvis stod sidst. Ét billede senere landede
+    // søgningen og billedet hoppede. Det er det enkelte hak man ser lige efter et snit, og det
+    // rammer kun skud med klip.
+    //
+    // Her parkeres det kommende klip på sin startframe mens det forrige skud stadig kører, så
+    // der er et par sekunder til at søgningen kan blive færdig i ro.
+    if (i === idx + 1 && !outgoing) {
+      if (!v.paused) v.pause();
+      try {
+        const start = clipStartFor(shots[i]);
+        if (Math.abs(v.currentTime - start) > 0.02) v.currentTime = start;
+      } catch (e) {}
+      continue;
+    }
     if (i !== idx && !outgoing) {
       if (!v.paused) v.pause();
       continue;
@@ -543,7 +561,10 @@ function syncShowVideos(shots, idx, localMs, prevIdx, koerer = true) {
         continue;
       }
       if (v.paused) {
-        v.currentTime = want;
+        // Kun hvis den ikke allerede ER der. Står den rigtigt fra forberedelsen ovenfor, ville
+        // en ny tildeling sætte endnu en søgning i gang og genskabe præcis det hak vi lige har
+        // fjernet - og det ville ske hver eneste gang, for her er v.paused altid sand.
+        if (Math.abs(v.currentTime - want) > 0.05) v.currentTime = want;
         const p = v.play();
         if (p && p.catch) p.catch(() => {});
       } else if (Math.abs(v.currentTime - want) > 0.34) {
