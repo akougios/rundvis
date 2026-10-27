@@ -231,6 +231,50 @@ const KB_MAX_ZOOM = 1.1;
 const KB_TRAVEL = 0.32;
 
 function clamp01(t) { return Math.max(0, Math.min(1, t)); }
+
+// PERCEPTUELT FINGERAFTRYK, 64 BIT (dHash).
+//
+// Bruges til ét formål: at opdage at to nabobilleder viser det samme. Et hårdt klip mellem to
+// fotos af samme facade fra næsten samme vinkel læses som en fejl — billedet hopper lidt uden at
+// der sker noget — og dér skal der tones over i stedet. dHash sammenligner nabopixels i et 9×8
+// gråtonebillede, så den er ligeglad med lysstyrke og komprimering og ser på struktur.
+//
+// Et 4×4-farvegennemsnit blev prøvet først og duede ikke: det måler lysstemning, ikke motiv. På
+// rigtige boligfotos scorede et køkken og et børneværelse 0,75 i lighed, altså HØJERE end to
+// billeder af det samme hus. Den slags tærskel ville tone over på de forkerte steder.
+const HASH_W = 9, HASH_H = 8;
+function billedHash(img) {
+  try {
+    const c = document.createElement("canvas");
+    c.width = HASH_W; c.height = HASH_H;
+    const x = c.getContext("2d", { willReadFrequently: true });
+    x.drawImage(img, 0, 0, HASH_W, HASH_H);
+    const d = x.getImageData(0, 0, HASH_W, HASH_H).data;
+    const bits = [];
+    for (let y = 0; y < HASH_H; y++) {
+      for (let k = 0; k < HASH_W - 1; k++) {
+        const a = (y * HASH_W + k) * 4, b = (y * HASH_W + k + 1) * 4;
+        bits.push(
+          d[a] * 0.299 + d[a + 1] * 0.587 + d[a + 2] * 0.114 >
+          d[b] * 0.299 + d[b + 1] * 0.587 + d[b + 2] * 0.114 ? 1 : 0
+        );
+      }
+    }
+    return bits;
+  } catch (e) { return null; }
+}
+function hashAfstand(a, b) {
+  if (!a || !b || a.length !== b.length) return 64;
+  let n = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) n++;
+  return n;
+}
+// Målt på rigtige boligfotos lå ALLE ubeslægtede par mellem 20 og 42 af 64 bit. Tærsklen er sat
+// godt under det gulv, så reglen kun fyrer på noget der er tydeligt tættere end to forskellige
+// rum nogensinde kom. Jeg har ikke haft et eksempel på to fotos af samme facade at kalibrere mod,
+// så den fejler med vilje til den sikre side: er den i tvivl, gør den ingenting, og så klippes
+// der hårdt præcis som før.
+const LIGNER_GRAENSE = 12;
 function clampU(u) { return Math.max(-1, Math.min(1, u)); }
 
 // The largest rectangle of the output's shape that fits inside the image. Whatever slack is left
@@ -738,7 +782,9 @@ const CLIP_MIN_BEATS = 4;
 // clipMotion(i) -> { start, moving } in seconds, from measureClipMotion, or null when the shot has
 // no clip or it has not been measured yet. Unmeasured is treated as no clip: the shot keeps its
 // arc length and the clip, if any, plays from its start. That is the safe direction to be wrong in.
-function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false) {
+// ligner(i) -> true hvis billede i ligner billede i-1 nok til at et hårdt klip ville læses som
+// et jump cut. Valgfri: uden den klipper filmen som før.
+function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = null) {
   if (count === 0) return [];
   const beats = (n) => Math.round(n * BEAT_MS);
   const motionAt = typeof clipMotion === "function" ? clipMotion : () => null;
@@ -945,12 +991,26 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false) {
   // else and nothing has an edge. High-end property films cut, hard and on the beat, and spend a
   // dissolve only where it means something - moving INTO the property after the establishing
   // shot, once across the middle to mark a change of part, and out to the closing shot.
+  //
+  // PLUS ÉT STED TIL: når to nabobilleder ligner hinanden.
+  //
+  // Et hårdt klip mellem to fotos af samme motiv fra næsten samme vinkel ser ud som en fejl -
+  // billedet hopper en smule uden at der sker noget. Det hedder et jump cut, og det er præcis
+  // hvad tre facadefotos i træk er i risiko for. Dér gør en overtoning skiftet bevidst i stedet
+  // for klodset. Reglen er altså ikke "altid fade" eller "aldrig fade", men: fade når naboerne
+  // ligner hinanden, klip hårdt når de ikke gør.
+  //
+  // Ligheden kommer udefra som ligner(i) - se billedHash. Mangler den, opfører klipningen sig
+  // nøjagtig som før.
   const lastIdx = count - 1;
   const dissolves = new Set();
   if (count > 2) {
     dissolves.add(1);                       // into the property
     dissolves.add(lastIdx);                 // out to the closing shot
     if (count >= 7) dissolves.add(Math.floor(count / 2)); // a breath across the middle
+    if (typeof ligner === "function") {
+      for (let i = 1; i < count; i++) if (ligner(i)) dissolves.add(i);
+    }
   }
   plan.forEach((p, i) => {
     p.transition = dissolves.has(i) ? "dissolve" : "cut";
@@ -1535,7 +1595,7 @@ const HIDDEN_TAB_MSG =
   "Optagelsen kræver at denne fane er fremme. Browseren sætter canvas-optagelse på pause i en " +
   "baggrundsfane, og filen bliver tom. Lad fanen være synlig, og prøv igen.";
 
-async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, onProgress, musicBytes, titles, logo }) {
+async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, onProgress, onWarn, musicBytes, titles, logo }) {
   if (!window.MediaRecorder) throw new Error("Din browser understøtter ikke videooptagelse. Prøv Chrome eller Safari 17+.");
   const mime = pickRecorderMime();
   if (!mime) throw new Error("Din browser kan ikke optage video fra et canvas.");
@@ -1610,11 +1670,15 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
         musicNodes = { src, dest };
         return dest.stream.getAudioTracks()[0];
       } catch (e) {
-        // Music is a nice-to-have; a video without it beats no video at all.
+        // Music is a nice-to-have; a video without it beats no video at all. Men det skal SIGES.
+        // Før stod der bare return null her, og så fik mægleren en tavs fil uden at vide hvorfor
+        // - filen ser korrekt ud, den har bare ikke noget lydspor overhovedet.
+        if (onWarn) onWarn("Musikken kunne ikke lægges på filen. Videoen er hentet uden lyd.");
         return null;
       }
     };
     const musicTrack = await buildMusicTrack();
+    if (!musicBytes && onWarn) onWarn("Der er ikke valgt nogen musik, så filen hentes uden lyd.");
 
     const stream = out.captureStream(0);
     const track = stream.getVideoTracks()[0];
@@ -1651,12 +1715,29 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
         const tMs = (f / fps) * 1000;
         // Same composer as the live preview, so the file is frame for frame what was on screen.
         composeShowFrame(octx, w, h, shots, tMs, { titles, logo });
+
+        // VENT FØRST, SKUB SÅ FRAMEN. Rækkefølgen her er ikke ligegyldig.
+        //
+        // MediaRecorder stempler hver frame med vægeuret i det øjeblik den bliver skubbet, ikke
+        // med det tidspunkt vi mener den hører til. Skubbede vi før ventetiden - som her indtil
+        // nu - kom framen afsted så snart komposition var færdig, og komposition tager ikke lige
+        // lang tid for hver frame: et skud med videolag er tungere end et med et stillbillede,
+        // og et snit hvor to lag blandes er tungest. Variationen i kompositionstid blev dermed
+        // skrevet direkte ind i framens tidsstempel.
+        //
+        // Målt på en eksporteret fil: 13 % af framesene lå mere end 10 ms galt, med afstande fra
+        // 13 til 53 ms mod de 33,3 de skulle ligge på. Medianen var rigtig, så filen SER korrekt
+        // ud i en afspiller - men hver ottende frame kommer for tidligt eller for sent, og det er
+        // dét man oplever som hakken. Det står permanent i filen; det er ikke afspilleren.
+        //
+        // Ventes der først, lander framen på det tidspunkt den hører til, uanset hvor lang tid
+        // den tog at tegne. setTimeout rammer ikke på mikrosekundet, men det er en spredning på
+        // et par millisekunder mod de tyve vi havde.
+        const wait = tMs - (performance.now() - t0);
+        await new Promise((r) => setTimeout(r, wait > 1 ? wait : 0));
         if (manualFrames) track.requestFrame();
 
         if (f % 5 === 0 && onProgress) onProgress({ phase: "render", current: f + 1, total: totalFrames });
-        const behind = performance.now() - t0;
-        const wait = tMs - behind;
-        await new Promise((r) => setTimeout(r, wait > 1 ? wait : 0));
       }
     } finally {
       document.removeEventListener("visibilitychange", onVis);
@@ -1712,6 +1793,7 @@ function Rundvis() {
   const [exportStatus, setExportStatus] = useState("idle"); // idle|working|done|error
   const [exportProgress, setExportProgress] = useState({ phase: "", current: 0, total: 0 });
   const [exportError, setExportError] = useState("");
+  const [exportNote, setExportNote] = useState("");   // advarsel paa en fil der ELLERS lykkedes
   const [exportFile, setExportFile] = useState(null); // { url, name }
   // Which shape the walkthrough is previewed in. Defaults to wide: that is how a listing video is
   // watched on a property site, and it is the format the photos were shot in.
@@ -2640,17 +2722,38 @@ function Rundvis() {
   // bestilles og det der vises er det samme — fra det øjeblik der er klip at vise.
   const vilHaveKlip = Boolean(hqClips && hqClips.some(Boolean));
 
+  // Fingeraftryk af hvert billede, så klipningen kan se hvornår to naboer viser det samme.
+  // Beregnes én gang pr. billedsæt; 9×8 pixels pr. billede, så det koster ingenting.
+  const [stillHash, setStillHash] = useState([]);
+  useEffect(() => {
+    let levende = true;
+    if (!flythroughStills.length) { setStillHash([]); return; }
+    Promise.all(flythroughStills.map((src) => new Promise((res) => {
+      const im = new Image();
+      im.onload = () => res(billedHash(im));
+      im.onerror = () => res(null);
+      im.src = src;
+    }))).then((h) => { if (levende) setStillHash(h); });
+    return () => { levende = false; };
+  }, [flythroughStills]);
+
+  const hashSignature = stillHash.map((h) => (h ? h.join("") : "-")).join("|");
+  const lignerNabo = useCallback(
+    (i) => i > 0 && hashAfstand(stillHash[i], stillHash[i - 1]) <= LIGNER_GRAENSE,
+    [stillHash]
+  );
+
   const basePlan = useMemo(
-    () => buildEditPlan(flythroughStills.length, null, tempoFaktor(tempo)),
-    [flythroughStills.length, tempo]
+    () => buildEditPlan(flythroughStills.length, null, tempoFaktor(tempo), false, lignerNabo),
+    [flythroughStills.length, tempo, hashSignature]
   );
   const motionSignature = (hqMotion || [])
     .map((m) => (m ? `${m.start.toFixed(2)},${m.moving.toFixed(2)}` : "-"))
     .join("|");
   const flythroughParams = useMemo(
     () => buildEditPlan(flythroughStills.length, (i) => (hqMotion && hqMotion[i]) || null,
-                        tempoFaktor(tempo), vilHaveKlip),
-    [flythroughStills.length, motionSignature, tempo, vilHaveKlip]
+                        tempoFaktor(tempo), vilHaveKlip, lignerNabo),
+    [flythroughStills.length, motionSignature, tempo, vilHaveKlip, hashSignature]
   );
 
   // The scrubber is moved by writing to the element directly. Driving it from state would
@@ -2795,6 +2898,7 @@ function Rundvis() {
     // memo først får flaget når det første klip er landet — og da er kaldene sendt.
     const planTilKlip = buildEditPlan(
       flythroughStills.length, (i) => (hqMotion && hqMotion[i]) || null, tempoFaktor(tempo), true,
+      lignerNabo,
     );
     const clips = hqClips ? hqClips.slice() : new Array(flythroughStills.length).fill(null);
     while (clips.length < flythroughStills.length) clips.push(null);
@@ -3106,6 +3210,7 @@ function Rundvis() {
     if (exportStatus === "working" || flythroughStills.length === 0) return;
     setExportStatus("working");
     setExportError("");
+    setExportNote("");
     setExportProgress({ phase: "prepare", current: 0, total: flythroughStills.length });
     if (exportFile) { URL.revokeObjectURL(exportFile.url); setExportFile(null); }
     try {
@@ -3114,6 +3219,7 @@ function Rundvis() {
         specs: flythroughParams,
         clips: hqClips,
         musicBytes: musicRawRef.current,
+        onWarn: setExportNote,
         titles,
         logo: logoRef.current,
         format,
@@ -3848,6 +3954,12 @@ function Rundvis() {
                   )}
 
                   {exportStatus === "error" && <p className="text-xs" style={{ color: AMBER }}>{exportError}</p>}
+
+                  {/* En færdig fil der mangler noget skal sige det selv. Før kunne man hente en
+                      video helt uden lydspor uden at få det at vide. */}
+                  {exportStatus === "done" && exportNote && (
+                    <p className="text-xs mt-1" style={{ color: AMBER }}>{exportNote}</p>
+                  )}
 
                   {exportStatus === "done" && exportFile && (
                     <div>
