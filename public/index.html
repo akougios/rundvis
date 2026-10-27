@@ -656,15 +656,19 @@ const GRADE_WARM = "rgba(255, 216, 170, 0.10)";
 //
 // Så i stedet en regel der ikke kræver at vi genkender rummet. Hvad 2D kan efterligne:
 //
-//   push, drift   2D laver et zoom. AI laver en dolly. I et dybt rum er de ikke til at skelne.
+//   push          2D laver et zoom. AI laver en dolly — i et dybt rum ses forskellen på at
+//                 dørkarmen man passerer flytter sig anderledes end bagvæggen.
 //   lean          2D laver zoom med vip. AI vipper rigtigt. Nogen forskel.
-//   pan, orbit    2D skubber udsnittet sidelæns. AI flytter kameraet sidelæns, og parallaksen
+//   pan           2D skubber udsnittet sidelæns. AI flytter kameraet sidelæns, og parallaksen
 //                 lander tværs OVER midten af billedet, hvor øjet er. Her kan 2D ikke følge med.
 //
-// Så når et rum skal have et AI-klip, foretrækkes pan og orbit. Det koster ingenting — det er
-// samme antal klip — og det er forskellen på en opgradering man kan se og en man betaler for.
-// Den gratis udgave beholder alle fem træk; den har ingenting at bevise.
-const LATERALE = ["pan", "orbit"];
+// Så når et rum skal have et AI-klip, foretrækkes push og pan. Push fordi det er selve
+// rundvisningen — at køre ind gennem et rum — og fordi en rigtig 3D-indkørsel har parallakse
+// som en 2D-zoom ikke kan efterligne: dørkarmen man passerer flytter sig anderledes end
+// bagvæggen. Pan fordi parallaksen dér lander tværs over midten af billedet, hvor øjet er.
+//
+// Orbit lå her før og er taget ud: se noten ved ALL nede i buildEditPlan.
+const KLIP_TRAEK = ["push", "pan"];
 
 // TEMPO. En faktor på alle takter, ikke en afspilningshastighed.
 //
@@ -771,34 +775,45 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false) {
       // family back to back, so a push-in is not followed by a lean-in nor a pull-out by a
       // pullback. Seeded on the position, so rebuilding the same property cuts identically.
       //
-      // "orbit" is in the set although 2D cannot really orbit - it renders as an arcing travel,
-      // and becomes a true arc around the room once that shot is upgraded. That is the honest
-      // place to put a move the free version can only suggest: it is what the upgrade buys.
-      const family = { push: "in", lean: "in", pull: "out", pullback: "out", pan: "across", orbit: "around", drift: "up" };
-      const prev = plan[i - 1] ? plan[i - 1].type : "push";
-      // No pullback in the body of the film. Measured against a Reel-E listing video - 18 shots,
-      // 40 seconds - 12 shots push IN, 4 hold their zoom, and only 2 pull out. Ours had pullback
-      // in the general pool on the reasoning that a run of push-ins with one pull-out at the end
-      // reads as a template; what it actually produced was a film that kept backing away from
-      // rooms it had just moved into. Moving in is what a walkthrough does. The closing shot
-      // still pulls out - that is the one place the reference does it too.
-      const ALL = ["pan", "push", "orbit", "drift", "lean"];
-      const recent = plan.slice(-3).map((q) => q.type);
-      const legal = ALL.filter((m) => m !== prev && family[m] !== family[prev]);
-      // Also prefer something not used in the last three shots. Without this the draw clumps -
-      // one run came out with six pans in sixteen shots and not a single lean - which looks
-      // less varied than the fixed cycle this replaced. Falls back to the looser set when
-      // being this picky leaves nothing.
-      const fresh = legal.filter((m) => recent.indexOf(m) === -1);
-      let pool = fresh.length ? fresh : legal;
-      // Skal rummet have et AI-klip, så vælg blandt de sidelæns træk hvis der er nogen tilbage
-      // efter reglerne ovenfor. Er der ikke, gælder den almindelige pulje — en gentagelse er
-      // værre end et træk der ikke viser sig frem.
+      // ORBIT OG DRIFT ER TAGET UD AF PULJEN.
+      //
+      // Begge afdækker flade som modellen aldrig har set, og det er dér den begynder at digte.
+      // Orbit drejer perspektivet, så siderne af alt skal opfindes undervejs; drift kraner op
+      // over et loft der sjældent er ordentligt med på et boligfoto. Et træhus der kom tilbage
+      // som et murstenshus er værre for en mægler end et kedeligt klip - han hæfter selv for
+      // hvordan boligen fremstilles.
+      //
+      // Definitionerne står stadig i _luma.js og i 2D-geometrien længere nede, så det er ét ord
+      // at sætte dem tilbage i ALL. Gør det helst kun for interiører.
+      //
+      // Push dominerer med vilje. At køre ind gennem et rum er hvad en rundvisning ER, og det er
+      // samtidig det træk der afdækker mindst ny flade - billedet bliver større, i stedet for at
+      // der kommer noget nyt ind fra siden. Vægte frem for en fast cyklus, så filmen ikke læses
+      // som en skabelon: med syv træk og atten rum ser man den samme række gå igen.
+      const ALL = ["push", "pan", "lean"];
+      // 5/2/1 og ikke mere: over fem ændrer vægten ingenting, fordi to-i-træk-loftet er det der
+      // binder. Skal push fylde mere end det, er det loftet der skal op til tre, ikke vægten.
+      const VAEGT = { push: 5, pan: 2, lean: 1 };
+      // Højst to ens i træk. Hvert skud har i forvejen sin egen længde og sin egen retning, så
+      // to pushes efter hinanden er ikke det samme skud to gange - men tre er en vane.
+      const prev = plan[i - 1] ? plan[i - 1].type : null;
+      const prev2 = plan[i - 2] ? plan[i - 2].type : null;
+      const spaerret = prev && prev === prev2 ? prev : null;
+      let pool = ALL.filter((m) => m !== spaerret);
+      // Skal rummet have et AI-klip, så vælg blandt de træk hvor opgraderingen kan SES.
       if (tilKlip) {
-        const lateral = pool.filter((m) => LATERALE.indexOf(m) !== -1);
-        if (lateral.length) pool = lateral;
+        const vises = pool.filter((m) => KLIP_TRAEK.indexOf(m) !== -1);
+        if (vises.length) pool = vises;
       }
-      type = pool[Math.floor(seededRandom(i * 7.13 + 2.7) * pool.length) % pool.length];
+      // Vægtet træk, stadig seedet på positionen, så samme bolig klippes ens hver gang.
+      const vaegte = pool.map((m) => VAEGT[m] || 1);
+      const sum = vaegte.reduce((a, b) => a + b, 0);
+      let r = seededRandom(i * 7.13 + 2.7) * sum;
+      type = pool[pool.length - 1];
+      for (let k = 0; k < pool.length; k++) {
+        r -= vaegte[k];
+        if (r <= 0) { type = pool[k]; break; }
+      }
       nBeats = paceBeats(i, count, tempo);
 
       // Every shot gets its own amount, not just its own direction. Earlier all pushes moved

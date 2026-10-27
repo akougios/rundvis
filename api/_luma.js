@@ -14,6 +14,11 @@ export const LUMA_BASE = "https://agents.lumalabs.ai/v1/generations";
 // push_in, so a property upgraded to real camera motion came back LESS varied than the free 2D
 // version it replaced - eighteen rooms all drifting the same way. The edit already alternates
 // direction shot by shot; this is what lets the generated clips honour it.
+//
+// orbit og drift er PARKERET: de står her, men buildEditPlan vælger dem ikke længere. Begge
+// afdækker flade modellen aldrig har set, og det er dér den finder på - et træhus kom tilbage
+// som et murstenshus. Skal de tilbage, skrives de ind i ALL i public/index.html; helst kun
+// for interiører.
 const CONCEPTS = {
   push: () => "push_in",
   lean: () => "push_in",
