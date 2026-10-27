@@ -1329,10 +1329,31 @@ function proxyUrlFor(clip) {
 // Loads a generated clip into a <video> ready for canvas compositing. It is fetched through our
 // own proxy and handed to the element as a blob: URL, which makes it same-origin - without that
 // the canvas would be tainted and neither the player nor the export could read a pixel back.
-async function loadClipVideo(clip) {
+// ET HENTET KLIP BLIVER LIGGENDE.
+//
+// Uden det her hentede eksporten hvert eneste klip ned fra Luma FORFRA, flere minutter efter
+// afspilleren havde hentet dem. Luma-adresserne er kortlivede, og vores egne signerede links
+// holder ti minutter (LINK_SEKUNDER i api/_lager.js). Gik der længere tid mellem at man så
+// filmen og trykkede hent - og det gør der, man ser den jo et par gange først - fejlede fetch,
+// og linje for linje faldt skuddene tilbage til stillbilledet. Afspilleren så stadig rigtig ud,
+// for den havde klippene i hukommelsen. Den hentede fil havde dem ikke.
+//
+// Målt på en fil mægleren fik: det første klip var med, resten var stillbilleder. Bevægelsen i
+// de rolige frames var 0,033 mod 0,637 i preview, og 34 % af framesene var bogstaveligt
+// identiske. Det er dét der opleves som at alle effekter forsvandt ved download.
+const klipBlobCache = new Map();
+async function klipBlob(clip) {
+  const noegle = typeof clip === "string" ? clip : clip.url;
+  if (klipBlobCache.has(noegle)) return klipBlobCache.get(noegle);
   const res = await fetch(proxyUrlFor(clip));
   if (!res.ok) throw new Error("Kunne ikke hente det genererede klip.");
   const blob = await res.blob();
+  klipBlobCache.set(noegle, blob);
+  return blob;
+}
+
+async function loadClipVideo(clip) {
+  const blob = await klipBlob(clip);
   const v = document.createElement("video");
   v.src = URL.createObjectURL(blob);
   v.muted = true;
@@ -1625,13 +1646,21 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
     // Sources are built up front, at this format's size, so no frame stalls mid-recording.
     // A generated clip is used where one exists; otherwise the still, so a half-generated
     // walkthrough still exports as a complete video.
+    const tabteKlip = [];
     for (let i = 0; i < stills.length; i++) {
       let shot = null;
       // The same test the player uses. Without it the downloaded file kept the clips the player
       // had dropped for barely moving, so the export showed frozen rooms that were not on screen
       // - the one divergence between preview and file that composeShowFrame exists to prevent.
       if (clips && clips[i] && !(specs[i] && specs[i].useClip === false)) {
-        try { shot = { video: await loadClipVideo(clips[i]), spec: specs[i] }; } catch (e) { shot = null; }
+        try {
+          shot = { video: await loadClipVideo(clips[i]), spec: specs[i] };
+        } catch (e) {
+          // IKKE i stilhed. Her stod bare shot = null, og så blev et betalt klip til et
+          // stillbillede uden at nogen fik det at vide - hverken mægleren eller os.
+          shot = null;
+          tabteKlip.push(i + 1);
+        }
       }
       if (!shot) {
         const img = await loadImageEl(stills[i]);
@@ -1639,6 +1668,12 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
       }
       shots.push(shot);
       if (onProgress) onProgress({ phase: "prepare", current: i + 1, total: stills.length });
+    }
+    if (tabteKlip.length && onWarn) {
+      onWarn(
+        `Rum ${tabteKlip.join(", ")} kunne ikke hente sit opgraderede klip og er med som stillbillede. ` +
+        "Lav videoen igen, og hent den med det samme."
+      );
     }
 
     const totalMs = shots.reduce((a, s) => a + s.spec.durationMs, 0);
