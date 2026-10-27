@@ -1096,6 +1096,24 @@ function captionAlpha(local, durationMs, inAt, holdMs) {
   return out < FADE ? 1 - out / FADE : 0;
 }
 
+// Skrumper skriften til teksten faktisk er inde i rammen.
+//
+// Åbningsteksten havde fast størrelse og ingen der målte efter. En adresse på 44 tegn - og det
+// er en helt almindelig dansk adresse med by og postnummer - løb ud over højre kant og ind i
+// logoet, så de sidste ord blev klippet midt over. Her måles den rigtige tekstbredde på det
+// rigtige canvas, så det holder uanset hvor lang adressen er og hvilket format filmen har.
+function tilpasSkrift(octx, tekst, maxBredde, startSize, vaegt, sporing) {
+  let size = startSize;
+  const gulv = Math.max(8, Math.round(startSize * 0.42));
+  for (let n = 0; n < 30; n++) {
+    octx.font = `${vaegt} ${size}px ${TITLE_FONT}`;
+    if ("letterSpacing" in octx) octx.letterSpacing = `${Math.round(size * sporing)}px`;
+    if (octx.measureText(tekst).width <= maxBredde || size <= gulv) break;
+    size = Math.max(gulv, Math.round(size * 0.94));
+  }
+  return size;
+}
+
 function drawTitles(octx, W, H, titles, idx, lastIdx, local, durationMs) {
   if (!titles) return;
   const head = (titles.headline || "").trim();
@@ -1114,29 +1132,35 @@ function drawTitles(octx, W, H, titles, idx, lastIdx, local, durationMs) {
   octx.textBaseline = "alphabetic";
 
   if (opening) {
-    // Lower left, the way a location card sits.
+    // Samme sprog som slutkortet: centreret, versaler, spærret. Den stod før nede i venstre
+    // hjørne i stor lys skrift, og med en almindelig dansk adresse løb den ud over kanten og
+    // ind i logoet. Centreret og spærret er desuden den måde et stedkort sættes i en
+    // boligfilm - og så er åbningen og afslutningen af samme familie i stedet for to stilarter.
     scrim(octx, W, H, "bottom", 0.42 * a);
-    const size = Math.round(W * 0.042);
     octx.globalAlpha = a;
-    octx.fillStyle = "rgba(255,255,255,0.97)";
-    octx.font = `300 ${size}px ${TITLE_FONT}`;
-    if ("letterSpacing" in octx) octx.letterSpacing = `${Math.round(size * 0.02)}px`;
-    octx.textAlign = "left";
-    octx.fillText(head, Math.round(W * 0.07), Math.round(H * 0.88));
+    octx.textAlign = "center";
+    // 0,72 af bredden: resten er luft i siderne og plads til logoet i hjørnet.
+    const size = tilpasSkrift(octx, head.toUpperCase(), W * 0.72, Math.round(W * 0.030), 400, 0.18);
+    octx.fillStyle = "rgba(255,255,255,0.95)";
+    octx.font = `400 ${size}px ${TITLE_FONT}`;
+    if ("letterSpacing" in octx) octx.letterSpacing = `${Math.round(size * 0.18)}px`;
+    octx.fillText(head.toUpperCase(), Math.round(W / 2), Math.round(H * 0.87));
   } else {
     // Centred end card, the address small above the name.
     scrim(octx, W, H, "bottom", 0.5 * a);
     octx.textAlign = "center";
     const cx = Math.round(W / 2);
+    // Samme breddemåling her. Slutkortet slap hidtil for problemet fordi adressen er sat lille,
+    // men et langt firmanavn ville løbe ud på nøjagtig samme måde.
     if (head) {
-      const small = Math.round(W * 0.021);
+      const small = tilpasSkrift(octx, head.toUpperCase(), W * 0.72, Math.round(W * 0.021), 400, 0.18);
       octx.fillStyle = "rgba(255,255,255,0.72)";
       octx.font = `400 ${small}px ${TITLE_FONT}`;
       if ("letterSpacing" in octx) octx.letterSpacing = `${Math.round(small * 0.18)}px`;
       octx.fillText(head.toUpperCase(), cx, Math.round(H * 0.79));
     }
     if (agent) {
-      const size = Math.round(W * 0.046);
+      const size = tilpasSkrift(octx, agent, W * 0.72, Math.round(W * 0.046), 300, 0.02);
       octx.fillStyle = "rgba(255,255,255,0.97)";
       octx.font = `300 ${size}px ${TITLE_FONT}`;
       if ("letterSpacing" in octx) octx.letterSpacing = `${Math.round(size * 0.02)}px`;
