@@ -805,14 +805,26 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false) {
         const vises = pool.filter((m) => KLIP_TRAEK.indexOf(m) !== -1);
         if (vises.length) pool = vises;
       }
-      // Vægtet træk, stadig seedet på positionen, så samme bolig klippes ens hver gang.
-      const vaegte = pool.map((m) => VAEGT[m] || 1);
-      const sum = vaegte.reduce((a, b) => a + b, 0);
-      let r = seededRandom(i * 7.13 + 2.7) * sum;
-      type = pool[pool.length - 1];
-      for (let k = 0; k < pool.length; k++) {
-        r -= vaegte[k];
-        if (r <= 0) { type = pool[k]; break; }
+      // ÅBNINGEN ER LÅST: push, push, pan.
+      //
+      // Skud ét er i forvejen et push (se isFirst ovenfor). De to næste blev før overladt til
+      // trækningen, og fordi den er seedet på positionen faldt de ALTID på pan - hver eneste
+      // film åbnede push, pan, pan. Man etablerer en retning fremad og slipper den igen med det
+      // samme. To skud ind og så ét der åbner rummet er den form en rundvisning har, og når
+      // åbningen alligevel er ens for alle boliger, skal den være valgt og ikke tilfaldet.
+      const AABNING = { 1: "push", 2: "pan" };
+      if (AABNING[i]) {
+        type = AABNING[i];
+      } else {
+        // Vægtet træk, stadig seedet på positionen, så samme bolig klippes ens hver gang.
+        const vaegte = pool.map((m) => VAEGT[m] || 1);
+        const sum = vaegte.reduce((a, b) => a + b, 0);
+        let r = seededRandom(i * 7.13 + 2.7) * sum;
+        type = pool[pool.length - 1];
+        for (let k = 0; k < pool.length; k++) {
+          r -= vaegte[k];
+          if (r <= 0) { type = pool[k]; break; }
+        }
       }
       nBeats = paceBeats(i, count, tempo);
 
