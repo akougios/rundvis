@@ -886,10 +886,26 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false) {
       // starting frame changes, and the zoom is opened up to carry the motion that the sideways
       // half of the move no longer does - a body shot runs 2.3-3.6s against the opener's 4.66,
       // so the same 8% reads about twice as fast there.
-      if (i % 2 === 1) {
+      // ...MEN IKKE NÅR SKUDDET GENTAGER DET FORRIGE TRÆK.
+      //
+      // Reglen ovenfor er god når nabobillederne er forskellige. Falder den derimod på to
+      // ens træk i træk - og det gør den nu, fordi push er vægtet tungt og åbningen er låst
+      // til push, push - så kører den SAMME bevægelse fra det SAMME fulde billede to gange.
+      // På tre fotos af samme hus udefra bliver det et spring tilbage ved hvert snit i
+      // stedet for en overgang: øjet er på vej ind, og så står det yderst igen.
+      //
+      // Det gentagne skud starter derfor et stykke inde og beholder sit sidelæns afsæt, så
+      // det tager over hvor det forrige var på vej hen. Zoomloftet på 1,1 gør at det ikke
+      // kan fortsætte præcis hvor det slap - der ville kun være halvanden procent tilbage
+      // at køre på - men det skal det heller ikke. Det skal bare ikke begynde forfra.
+      const gentager = plan[i - 1] && plan[i - 1].type === type;
+      if (i % 2 === 1 && !gentager) {
         zFrom = 1.0;
         zTo = Math.min(KB_MAX_ZOOM, 1.0 + 0.085 * vz);
         fromU = { x: 0, y: 0 };
+      } else if (gentager) {
+        zFrom = Math.min(1.045, zFrom + 0.035);
+        zTo = Math.min(KB_MAX_ZOOM, zFrom + 0.055 * vz);
       }
     }
 
