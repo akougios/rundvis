@@ -76,6 +76,54 @@ export async function skrivForbrug(linje) {
   }
 }
 
+// HVILKE BOLIGER HAR KONTOEN ALLEREDE BRUGT PENGE PÅ.
+//
+// Distinkte boliger, ikke klip. Det er den enhed kunden betaler per i hele resten af modellen,
+// og det er også den rigtige enhed for en kvote: en tester der har fået fem boliger skal kunne
+// køre alle elleve billeder af den femte igennem uden at blive afbrudt midt i.
+export async function brugteBoliger(kontoId) {
+  if (!supabaseErSat() || !kontoId) return new Set();
+  try {
+    const r = await fetch(
+      `${url()}/rest/v1/forbrug?konto_id=eq.${kontoId}&bolig_id=not.is.null&select=bolig_id`,
+      { headers: { apikey: service(), Authorization: `Bearer ${service()}` } },
+    );
+    if (!r.ok) return new Set();
+    const rows = await r.json();
+    return new Set((Array.isArray(rows) ? rows : []).map((x) => x.bolig_id).filter(Boolean));
+  } catch (e) {
+    return new Set();
+  }
+}
+
+// SØRG FOR AT BOLIGEN FINDES, før der skrives forbrug på den.
+//
+// forbrug.bolig_id peger på bolig(id), men ingen har nogensinde indsat en række i bolig -
+// browseren laver bare en UUID og sender den med. Fremmednøglen afviser derfor hvert eneste
+// forbrugs-insert, og skrivForbrug sluger fejlen i stilhed. Resultatet er en tom forbrugstabel:
+// ingen fakturering, ingen omkostningsoversigt, og ingen kvote der kan tælle på noget.
+//
+// Fejler aldrig opad, af samme grund som skrivForbrug: bogføring er vores problem, ikke kundens.
+export async function sikrBolig(kontoId, boligId, adresse) {
+  if (!supabaseErSat() || !kontoId || !boligId) return;
+  try {
+    await fetch(`${url()}/rest/v1/bolig`, {
+      method: "POST",
+      headers: {
+        apikey: service(),
+        Authorization: `Bearer ${service()}`,
+        "Content-Type": "application/json",
+        // Findes den allerede, er der ingenting at gøre - og det er det normale tilfælde,
+        // for alle klip i samme bolig sender den samme id.
+        Prefer: "resolution=ignore-duplicates,return=minimal",
+      },
+      body: JSON.stringify({ id: boligId, konto_id: kontoId, adresse: adresse || null }),
+    });
+  } catch (e) {
+    /* bevidst tavs */
+  }
+}
+
 // PORTEN foran alt der koster penge.
 //
 // Rækkefølgen er med vilje: er Supabase slet ikke sat op, falder vi tilbage til den delte
@@ -104,14 +152,48 @@ export async function maaBruge(req, res, { kraevAbonnement = true } = {}) {
   // kravet låse alle ude af et produkt ingen kan betale for — og det slår sig selv til den dag
   // nøglen sættes, i stedet for at afhænge af at nogen husker et flag.
   const stripeOppe = Boolean(process.env.STRIPE_SECRET_KEY);
-  if (kraevAbonnement && stripeOppe && konto.abonnement_status !== "aktiv") {
-    res.status(402).json({
-      error: "Opgraderingen kræver et aktivt abonnement.",
-      needsSubscription: true,
-      status: konto.abonnement_status,
-    });
-    return null;
+
+  if (kraevAbonnement) {
+    // RÆKKEFØLGEN ER PORTENS REGELSÆT, og den er med vilje sådan her:
+    //
+    //   1. fri_adgang      ejerne. Ingen grænse, intet opslag.
+    //   2. aktivt abonnement   kunden har betalt. Som før.
+    //   3. gratis_boliger  testerne. Tælles mod distinkte boliger i forbrug.
+    //   4. ellers          lukket.
+    //
+    // Punkt fire er nyt og er hele pointen. Før stod der kun punkt to, og den gjaldt kun når
+    // der FANDTES en Stripe-nøgle - så uden Stripe kunne enhver der var logget ind opgradere
+    // frit. Hvert klip koster rigtige penge hos Luma, så der var ingen bund i det.
+    if (!konto.fri_adgang) {
+      const harAbonnement = stripeOppe && konto.abonnement_status === "aktiv";
+      if (!harAbonnement) {
+        const gratis = Number(konto.gratis_boliger) || 0;
+        const boligId = (req.body && req.body.boligId) || null;
+        const brugt = await brugteBoliger(konto.id);
+        // En bolig der allerede er betalt for tæller ikke igen. Ellers blev en tester afbrudt
+        // midt i sin femte bolig, med halvdelen af billederne opgraderet.
+        const nyBolig = Boolean(boligId) && !brugt.has(boligId);
+        const efter = brugt.size + (nyBolig ? 1 : 0);
+        if (efter > gratis) {
+          res.status(402).json({
+            error: gratis > 0
+              ? `Du har brugt dine ${gratis} gratis boliger. Skriv til os for at fortsætte.`
+              : "Opgradering kræver et abonnement. Den gratis video kan du lave som du vil.",
+            needsSubscription: true,
+            status: konto.abonnement_status,
+            brugteBoliger: brugt.size,
+            gratisBoliger: gratis,
+          });
+          return null;
+        }
+      }
+    }
   }
+
+  // Porten er passeret. Boligen skal findes i databasen før forbruget kan bogføres på den,
+  // uanset hvilken af de fire veje der førte hertil — ellers afviser fremmednøglen insertet.
+  const sagId = (req.body && req.body.boligId) || null;
+  if (sagId) await sikrBolig(konto.id, sagId, (req.body && req.body.adresse) || null);
 
   // Returnerer hvem det er, så endpointet kan bogføre forbruget uden at slå det op igen.
   return { bruger, konto };
