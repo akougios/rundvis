@@ -799,6 +799,10 @@ const CLIP_MAX_BEATS = 9;
 // length on a 2D move. Shorter and real beats longer and fake: that is what a videographer does
 // with a take that runs out.
 const CLIP_MIN_BEATS = 4;
+// Hvor meget af den bevægende del af et klip der bruges. Resten er hale, og det er i halen
+// modellen finder på ting — se haleVagt i buildEditPlan. Skru op hvis filmen føles for kort,
+// ned hvis der stadig dukker mærkelige ting op sent i klippene.
+const CLIP_HALE = 0.75;
 
 // clipMotion(i) -> { start, moving } in seconds, from measureClipMotion, or null when the shot has
 // no clip or it has not been measured yet. Unmeasured is treated as no clip: the shot keeps its
@@ -988,10 +992,22 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
         useClip = false;
       } else {
         clipStart = m.start;
+        // HALEN BRUGES IKKE.
+        //
+        // Modellens opfindelser hober sig op jo længere klippet kører: den har haft mere tid til
+        // at digte. I et klip af et bordtennisbord var de første sekunder rene, og så dukkede der
+        // en bold op ved nettet og trillede hen over bordet resten af vejen. Samme møsnter som
+        // murstenene — det er ikke en fejl der rammer tilfældigt, den kommer sent.
+        //
+        // Så vi bruger kun de første tre fjerdedele af den del der bevæger sig. Men aldrig så
+        // meget at skuddet falder under minimumslængden: så ville et klip mægleren har betalt
+        // for blive droppet til fordel for 2D, for at undgå en fejl der måske ikke var der.
+        // Vagten bider altså kun når der er plads til den.
+        const haleVagt = Math.max(CLIP_MIN_BEATS, Math.floor(movingBeats * CLIP_HALE * 2) / 2);
         // min() with movingBeats is what shortens the shot to the moving part: a 9-beat
         // establishing shot whose clip runs out at 5 beats becomes a 5-beat shot that moves all
         // the way through, instead of a 9-beat shot that does not move at all.
-        nBeats = Math.min(nBeats + CLIP_BONUS_BEATS, CLIP_MAX_BEATS, movingBeats);
+        nBeats = Math.min(nBeats + CLIP_BONUS_BEATS, CLIP_MAX_BEATS, haleVagt);
       }
     }
 
@@ -3605,9 +3621,9 @@ function Rundvis() {
                   the controls - it is a thing you flick between while looking at the video, so it
                   belongs where your eyes already are. Hidden entirely until there is a second
                   version to switch to, so the page an agent meets first still has one button. */}
-              {flythroughStatus === "done" && sourceTabs.length > 1 && (
+              {flythroughStatus === "done" && (sourceTabs.length > 1 || musicName) && (
                 <div className="flex items-center gap-1 mb-2">
-                  {sourceTabs.map(([k, label]) => {
+                  {sourceTabs.length > 1 && sourceTabs.map(([k, label]) => {
                     const on = showSource === k;
                     return (
                       <button
@@ -3625,6 +3641,29 @@ function Rundvis() {
                       </button>
                     );
                   })}
+
+                  {/* Lyden hører til samme sted som formatknapperne, af samme grund: man slår
+                      den fra og til mens man ser på videoen, ikke mens man scroller i
+                      musikafsnittet nede under den. Den stod før nede ved "Vælg lydfil", et
+                      halvt skærmbillede væk fra det den handler om.
+                      ml-auto skubber den ud i højre side, så rækken har formaterne til venstre
+                      og lyden til højre i stedet for fire knapper i klump. */}
+                  {musicName && (
+                    <button
+                      onClick={() => setMusicOnPreview((v) => !v)}
+                      title={musicOnPreview ? "Slå lyden fra" : "Slå lyden til"}
+                      className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] tracking-wide"
+                      style={{
+                        border: `1px solid ${musicOnPreview ? ACCENT : LINE}`,
+                        color: musicOnPreview ? ACCENT : MUTED,
+                        backgroundColor: "transparent",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <Icon name={musicOnPreview ? "volume" : "music"} size={13} />
+                      {musicOnPreview ? "Lyd til" : "Lyd fra"}
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -4022,15 +4061,8 @@ function Rundvis() {
                       />
                     </label>
 
-                    {musicName && (
-                      <button
-                        onClick={() => setMusicOnPreview((v) => !v)}
-                        className="flex items-center gap-1.5 text-xs"
-                        style={{ color: musicOnPreview ? ACCENT : MUTED }}
-                      >
-                        <Icon name="volume" size={13} /> {musicOnPreview ? "Lyd til i preview" : "Lyd fra i preview"}
-                      </button>
-                    )}
+                    {/* Lydknappen sad her. Den er flyttet op ved siden af videoen, hvor man
+                        kigger når man slår lyden fra. */}
                   </div>
 
                   {musicName && <p className="text-[11px] mt-2" style={{ color: TEXT }}>{musicName}</p>}
