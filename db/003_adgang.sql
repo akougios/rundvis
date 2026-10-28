@@ -71,20 +71,36 @@ $$;
 grant execute on function brugte_boliger(uuid) to service_role;
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- SÆT ADGANGEN. Udfyld mailadresserne og kør.
+-- SÆT ADGANGEN.
 --
--- Ejerne: fri adgang.
+-- Nulstil FØRST. Uden den linje ville en konto der engang har fået fri adgang beholde den for
+-- evigt, og "kun de to" ville langsomt blive til "de to plus hvad der er sivet ind". Det er
+-- ejerskabet af en pengeboks; den skal kunne sættes tilbage til nul med én sætning.
+update konto set fri_adgang = false where fri_adgang;
+
+-- Ejerne. Ubegrænset, fordi vi ejer det.
 update konto set fri_adgang = true
 where id in (
   select m.konto_id from medlemskab m
   join auth.users u on u.id = m.bruger_id
   where lower(u.email) in (
-    'akougios@gmail.com'
-    -- , 'markus@eksempel.dk'     <- SÆT MARKUS' RIGTIGE MAIL IND
+    'akougios@gmail.com',
+    'markusmandal23@gmail.com'
   )
 );
 
--- Testerne: fem boliger hver.
+-- Tjek at der blev ramt præcis to:
+--   select navn, fri_adgang from konto where fri_adgang;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- TESTERNE. Køres når de to konti FINDES — altså efter de har oprettet sig på siden.
+--
+-- De er helt almindelige profiler. De får fem boliger, og når de er brugt, falder de ned på
+-- gratis-versionen som alle andre: 2D-videoen kan de lave frit, opgraderingen kræver abonnement.
+-- Der er ikke noget særligt ved dem ud over de fem.
+--
+-- Sæt mailadresserne ind og fjern kommentartegnene:
+--
 -- update konto set gratis_boliger = 5
 -- where id in (
 --   select m.konto_id from medlemskab m
@@ -92,6 +108,16 @@ where id in (
 --   where lower(u.email) in ('tester1@eksempel.dk', 'tester2@eksempel.dk')
 -- );
 
--- Sådan ser det ud bagefter:
---   select k.navn, k.fri_adgang, k.gratis_boliger, brugte_boliger(k.id) as brugt
---   from konto k order by k.oprettet desc;
+-- ─────────────────────────────────────────────────────────────────────────────
+-- HELE BILLEDET, til at holde øje med undervejs:
+--
+--   select k.navn,
+--          k.fri_adgang,
+--          k.gratis_boliger,
+--          brugte_boliger(k.id) as brugt,
+--          k.abonnement_status
+--   from konto k
+--   order by k.fri_adgang desc, k.gratis_boliger desc, k.oprettet desc;
+--
+-- Alle med fri_adgang = false og gratis_boliger = 0 og uden abonnement kan lave gratis-videoen
+-- og intet andet. Det er standarden for en ny bruger, og det er med vilje.
