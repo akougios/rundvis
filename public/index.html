@@ -2252,6 +2252,19 @@ function Rundvis() {
 
   // How far along one room is. A finished room is full; a room in flight fills against the three
   // minutes a clip usually takes, and stops at 92% so it never sits full while still working.
+  // HVAD DER SKER NÅR DET TAGER LÆNGERE END VENTET.
+  //
+  // Før blev både rummets andel og den samlede procent hårdt afskåret — 0,92 pr. rum og 0,95 i
+  // alt. Tog jobbet længere end de 180 sekunder pr. klip vi regner med, parkerede bjælken på 95
+  // og blev stående, og det gjorde den i to minutter ad gangen. En bjælke der står helt stille
+  // læses som at siden er gået ned.
+  //
+  // Her kryber den videre i stedet, langsommere og langsommere, og når aldrig knækket plus
+  // resten af vejen. Den lyver ikke mere end før — den sagde også 95 før — men den bliver ved
+  // med at vise at der sker noget.
+  const krybeMod = (v, knaek) =>
+    v <= knaek ? v : knaek + (0.99 - knaek) * (1 - Math.exp(-(v - knaek) * 1.6));
+
   const hqRoomFill = (i) => {
     const st = hqRoom[i];
     if (st === "klar") return 1;
@@ -2259,7 +2272,7 @@ function Rundvis() {
     if (st !== "igang") return 0;
     const t0 = hqStartedRef.current[i];
     if (!t0) return 0.02;
-    return Math.max(0.02, Math.min(0.92, (performance.now() - t0) / 1000 / HQ_SECONDS_PER_CLIP));
+    return Math.max(0.02, krybeMod(((performance.now() - t0) / 1000) / HQ_SECONDS_PER_CLIP, 0.92));
   };
 
   const hqMissing = flythroughStills.filter((_, i) => !(hqClips && hqClips[i])).length;
@@ -2281,16 +2294,40 @@ function Rundvis() {
     const maalt = sum / total;
     const forventetMs = Math.ceil(total / HQ_CONCURRENCY) * HQ_SECONDS_PER_CLIP * 1000;
     const tid = hqStartTidRef.current ? (performance.now() - hqStartTidRef.current) / forventetMs : 0;
-    return Math.min(0.99, Math.max(maalt, Math.min(tid, 0.95)));
+    return Math.min(0.99, Math.max(maalt, krybeMod(tid, 0.95)));
   };
 
   const hqFaerdige = Object.values(hqRoom).filter((v) => v === "klar" || v === "fejl").length;
+  // MINUTTER TILBAGE, regnet på den tid der faktisk er gået.
+  //
+  // Her stod før: ceil(tilbage / 6) * 180 sekunder. Det er et antal HOLD, ikke en tid. Med elleve
+  // klip gav det to hold, altså seks minutter, og tallet blev stående på seks indtil der var fem
+  // klip tilbage — hvorefter det sprang til tre og blev stående DÉR resten af vejen. Et klip der
+  // havde kørt i to minutter og halvtreds talte stadig for fulde tre. Derfor stod der tre
+  // minutter tilbage hele vejen fra 0 til 100 %.
+  //
+  // Nu trækkes den tid fra der er gået på hvert klip der kører. Holdet er færdigt når det
+  // langsomste af dem er det, og først derefter venter køen.
   const hqMinutterTilbage = (() => {
     const i_alt = hqProgress.total || 0;
     if (!i_alt) return null;
-    const tilbage = Math.max(0, i_alt - hqFaerdige);
-    if (!tilbage) return null;
-    return Math.max(1, Math.ceil((Math.ceil(tilbage / HQ_CONCURRENCY) * HQ_SECONDS_PER_CLIP) / 60));
+    const naa = performance.now();
+    const igangRest = [];
+    let ikkeStartet = 0;
+    for (let i = 0; i < flythroughStills.length; i++) {
+      const st = hqRoom[i];
+      if (st === "klar" || st === "fejl") continue;
+      const t0 = hqStartedRef.current[i];
+      if (st === "igang" && t0) {
+        igangRest.push(Math.max(0, HQ_SECONDS_PER_CLIP - (naa - t0) / 1000));
+      } else {
+        ikkeStartet++;
+      }
+    }
+    if (!igangRest.length && !ikkeStartet) return null;
+    const holdRest = igangRest.length ? Math.max(...igangRest) : 0;
+    const koe = Math.ceil(ikkeStartet / HQ_CONCURRENCY) * HQ_SECONDS_PER_CLIP;
+    return Math.max(1, Math.ceil((holdRest + koe) / 60));
   })();
 
   // Bjælken og tallet skrives direkte, to gange i sekundet. Det er rigeligt til at se at der
