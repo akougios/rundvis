@@ -6,8 +6,12 @@
 
 // NIVEAUERNE. Målt i boliger, ikke i brugere: en bruger koster os ingenting, en bolig koster os
 // fjorten Luma-klip. Derfor er alle betalte niveauer fri adgang for hele kontoret, og derfor er
-// trappen nedad i pris per bolig flad med vilje — 595, 499, 450, 433. Mængderabat i software er
+// trappen nedad i pris per bolig flad med vilje — 795, 559, 450, 433. Mængderabat i software er
 // gratis at give; her går den direkte fra bundlinjen.
+//
+// Det store trin ligger med vilje mellem Mægler og Kontor: 559 mod 450 kr per bolig. Kontor er
+// det niveau vi gerne vil have folk til at vælge, og et niveau man kun vælger hvis stykprisen
+// falder mærkbart når man gør det.
 //
 // "slags" afgør hvordan niveauet sælges, og de tre er ikke ens:
 //   abonnement  Stripe Checkout i subscription-tilstand. Virker i dag.
@@ -18,19 +22,30 @@ export const PLANER = {
   enkelt: {
     navn: "Enkelt",
     beskrivelse: "Én bolig, ingen binding",
-    // 895 kr, ikke 595. Tallet er ikke valgt efter fornemmelse, men efter hvor skiftet skal
-    // ligge: ved 595 kr kunne en mægler købe fire enkeltvideoer for mindre end Mægler koster,
-    // og den typiske danske mæglervirksomhed laver 3-6 boliger om måneden. Enkelt var altså
-    // billigere end abonnementet for præcis den kunde abonnementet er lavet til. Ved 895 kr
-    // bliver Mægler billigere fra tredje bolig, og Enkelt er det den skal være: en prøve.
-    oere: 89500,                  // 895 kr
+    // 795 kr. Sat ned fra 895 for at gøre springet op til Mægler mindre afskrækkende.
+    //
+    // Den gamle begrundelse for 895 står her, fordi den stadig er rigtig og fordi prisen skal
+    // tilbage op hvis det her ikke virker: ved 595 kr kunne en mægler købe fire enkeltvideoer
+    // for mindre end Mægler koster, og den typiske danske mæglervirksomhed laver 3-6 boliger om
+    // måneden — altså var Enkelt billigere end abonnementet for præcis den kunde abonnementet
+    // er lavet til.
+    //
+    // KONSEKVENSEN af 795 sammen med Mægler til 2.795: Mægler bliver først billigere fra den
+    // FJERDE bolig, hvor den før blev det fra den tredje. Kunden der laver tre boliger om
+    // måneden har nu ingen grund til at tegne abonnement. Det er prisen for et blødere første
+    // skridt, og den skal holdes øje med.
+    oere: 79500,                  // 795 kr
     inkluderede: 1,
     slags: "engang",
   },
   maegler: {
     navn: "Mægler",
     beskrivelse: "Til den enkelte mægler",
-    oere: 249500,                 // 2.495 kr — 499 kr per bolig
+    // 2.795 kr, op fra 2.495. Hævet for at gøre Kontor til det åbenlyse valg: trinet fra Mægler
+    // til Kontor var 499 mod 450 kr per bolig, altså ti procent billigere for fire gange så stor
+    // en månedlig forpligtelse — ingen skifter op for det. Nu er det 559 mod 450, en femtedel
+    // billigere, og dét er et skifte der kan betale sig at regne på.
+    oere: 279500,                 // 2.795 kr — 559 kr per bolig
     inkluderede: 5,
     slags: "abonnement",
   },

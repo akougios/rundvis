@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Rundvis — AI boligvideo prototype</title>
+<title>Rundvis — boligvideo fra dine egne billeder</title>
 <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
@@ -507,7 +507,9 @@ function clipStartFor(shot) {
   const v = shot.video;
   const clip = v && isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
   if (!clip) return 0;
-  const hold = shot.spec.durationMs / 1000;
+  // Ved fart r bruger et skud paa hold sekunder hold*r sekunder af klippet.
+  const fart = shot.spec.klipFart || 1;
+  const hold = (shot.spec.durationMs / 1000) * fart;
   const want = shot.spec.clipStart || 0;
   // Never so far in that the shot outruns the end of the clip.
   return Math.max(0, Math.min(want, clip - hold));
@@ -550,8 +552,13 @@ function syncShowVideos(shots, idx, localMs, prevIdx, koerer = true) {
     const from = clipStartFor(shot);
     // The outgoing clip carries on from where its shot ended, for as long as the dissolve lasts.
     const into = outgoing ? shot.spec.durationMs + localMs : localMs;
-    const want = Math.min(from + into / 1000, Math.max(0, (v.duration || 99) - 0.05));
+    // Farten: ved 0,77 er klippet 0,77 sekund længere inde for hvert sekund der går på skærmen.
+    // Den skal med BEGGE steder — både på elementet, så billedet faktisk bevæger sig langsommere,
+    // og i udregningen af hvor klippet skal stå, ellers driver de to fra hinanden med det samme.
+    const fart = shot.spec.klipFart || 1;
+    const want = Math.min(from + (into / 1000) * fart, Math.max(0, (v.duration || 99) - 0.05));
     try {
+      if (Math.abs((v.playbackRate || 1) - fart) > 0.01) v.playbackRate = fart;
       if (!koerer) {
         // Pauset: sæt den ét sted og lad den ligge. Tærsklen er stram her, fordi der ikke er
         // nogen bevægelse til at skjule et spring — men uden den ville vi sætte currentTime
@@ -981,12 +988,26 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
     }
 
     // Fit the shot to the clip's MOVING part, not to its duration.
+    // TEMPOET SKAL OGSÅ GÆLDE KLIPPENE.
+    //
+    // Her lå den fejl han mærkede: på den gratis 2D-film spænder tempoknappen over 54, 42 og 30
+    // sekunder, men med et AI-klip i hvert rum gav alle tre NØJAGTIG 39,8 sekunder og 2,8 sekunder
+    // pr. skud. Et klip-skud bindes nemlig af hvor længe klippet bevæger sig, og det tal er en
+    // egenskab ved klippet - det skaleres ikke med tempo. Knappen var død på præcis den film
+    // mægleren betaler for.
+    //
+    // Så tempoet styrer afspilningshastigheden i stedet. Roligt kører kameraet langsommere
+    // gennem rummet og får dermed flere sekunder ud af den samme bevægelse; hurtigt kører det
+    // hurtigere og skærer før. Det er også det en fartknap BØR gøre - ikke bare vise det samme
+    // klip længere, men bevæge sig anderledes.
+    const klipFart = tempo > 0 ? 1 / tempo : 1;
     let useClip = true, clipStart = 0;
     const m = motionAt(i);
     // isFinite guards the arithmetic below: a malformed measurement would otherwise turn the
     // shot's duration into NaN, and one NaN duration takes down the whole timeline.
     if (m && isFinite(m.moving) && isFinite(m.start)) {
-      const movingBeats = Math.floor(((m.moving * 1000) / BEAT_MS) * 2) / 2;
+      // Ved halv fart rækker den samme bevægelse dobbelt så mange slag.
+      const movingBeats = Math.floor(((m.moving * 1000) / (BEAT_MS * klipFart)) * 2) / 2;
       if (movingBeats < CLIP_MIN_BEATS) {
         // Barely moves at all. Keep the arc, show the 2D move instead.
         useClip = false;
@@ -1017,7 +1038,7 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
     // built for 1.1, which is the one thing this whole approach exists to avoid.
     zFrom = Math.min(zFrom, KB_MAX_ZOOM); zTo = Math.min(zTo, KB_MAX_ZOOM);
 
-    plan.push({ type, dirSign: d, zFrom, zTo, fromU, toU, durationMs: beats(nBeats), useClip, clipStart });
+    plan.push({ type, dirSign: d, zFrom, zTo, fromU, toU, durationMs: beats(nBeats), useClip, clipStart, klipFart });
   }
 
   // Transitions. Mostly dissolves, with a hard cut every third shot for lift. The hard cut is
@@ -2516,7 +2537,7 @@ function Rundvis() {
     }
     await Promise.all(Array.from({ length: concurrency }, worker));
     if (anyAudioFailed) {
-      setVoiceOverallError("Nogle scener kunne ikke få en AI-stemme (ElevenLabs) og bruger i stedet browserens indbyggede tale som reserve.");
+      setVoiceOverallError("Nogle scener kunne ikke få en indtalt stemme og bruger i stedet browserens indbyggede tale som reserve.");
     }
     setVoicesPreparing(false);
   }, [scenes]);
@@ -3525,7 +3546,7 @@ function Rundvis() {
               <>
                 <h1 className="font-display text-2xl mb-1">Afspil</h1>
                 <p className="text-sm mb-5" style={{ color: MUTED }}>
-                  {voicesPreparing ? "Genererer AI-stemme for hver scene…" : "Filmisk kamerabevægelse, med rigtig AI-stemme."}
+                  {voicesPreparing ? "Klargør speak for hver scene…" : "Filmisk kamerabevægelse, med indtalt speak."}
                 </p>
                 {voiceOverallError && <p className="text-xs mb-4" style={{ color: AMBER }}>{voiceOverallError}</p>}
 
@@ -3586,7 +3607,7 @@ function Rundvis() {
               <button onClick={togglePlay} disabled={!allVoicesReady} className="p-4 rounded-full" style={{ backgroundColor: ACCENT, color: "#fff", opacity: allVoicesReady ? 1 : 0.5 }}>
                 {voicesPreparing ? <Icon name="loader" size={20} /> : <Icon name={isPlaying ? "pause" : "play"} size={20} />}
               </button>
-              <button title="Kræver tilkobling af en AI-videomodel i produktionsversionen" className="px-4 py-3 rounded-full text-xs" style={{ border: `1px solid ${LINE}`, color: MUTED, cursor: "default" }}>Eksportér (kommer snart)</button>
+              <button title="Kommer i produktionsversionen" className="px-4 py-3 rounded-full text-xs" style={{ border: `1px solid ${LINE}`, color: MUTED, cursor: "default" }}>Eksportér (kommer snart)</button>
             </div>
 
             <label className="flex items-center justify-center gap-2 text-xs mb-8 cursor-pointer" style={{ color: MUTED }}>
@@ -4309,7 +4330,7 @@ function Rundvis() {
                     </p>
                   </div>
 
-                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>Opgradér med AI</p>
+                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>Opgradér videoen</p>
                   <div className="flex flex-col gap-3 mb-6">
                     {(profil && profil.planer ? profil.planer : []).map((plan) => {
                       const abn = plan.slags === "abonnement";
