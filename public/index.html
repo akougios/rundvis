@@ -810,6 +810,9 @@ const CLIP_MIN_BEATS = 4;
 // modellen finder på ting — se haleVagt i buildEditPlan. Skru op hvis filmen føles for kort,
 // ned hvis der stadig dukker mærkelige ting op sent i klippene.
 const CLIP_HALE = 0.75;
+// Hvor langsomt et klip må spilles for at strække sin bevægelse ud. Under det halve begynder det
+// at ligne slowmotion frem for et roligt kamera, og så er panoreringen pænere.
+const KLIP_FART_MIN = 0.5;
 
 // clipMotion(i) -> { start, moving } in seconds, from measureClipMotion, or null when the shot has
 // no clip or it has not been measured yet. Unmeasured is treated as no clip: the shot keeps its
@@ -1000,7 +1003,7 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
     // gennem rummet og får dermed flere sekunder ud af den samme bevægelse; hurtigt kører det
     // hurtigere og skærer før. Det er også det en fartknap BØR gøre - ikke bare vise det samme
     // klip længere, men bevæge sig anderledes.
-    const klipFart = tempo > 0 ? 1 / tempo : 1;
+    let klipFart = tempo > 0 ? 1 / tempo : 1;
     // SLUTSKUDDET BRUGER ALDRIG ET KLIP.
     //
     // "pull" ovenfor er afslutningen: kameraet trækker ud til hele det uklippede foto. Det er
@@ -1021,10 +1024,30 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
     // shot's duration into NaN, and one NaN duration takes down the whole timeline.
     if (m && isFinite(m.moving) && isFinite(m.start)) {
       // Ved halv fart rækker den samme bevægelse dobbelt så mange slag.
-      const movingBeats = Math.floor(((m.moving * 1000) / (BEAT_MS * klipFart)) * 2) / 2;
+      let movingBeats = Math.floor(((m.moving * 1000) / (BEAT_MS * klipFart)) * 2) / 2;
       if (movingBeats < CLIP_MIN_BEATS) {
+        // SÆT FARTEN NED FØR DU KASSERER.
+        //
+        // Her blev klippet smidt væk så snart det bevægede sig for kort, og mægleren så
+        // 2D-versionen af et klip han havde betalt for. Men et klip der bevæger sig lidt har
+        // stadig ægte parallakse, og det er dét han betaler for — 2D har ingen.
+        //
+        // Grunden til at der overhovedet var et gulv er værd at huske: bevæger klippet sig et
+        // halvt sekund og varer skuddet halvandet, står de sidste to tredjedele FROSNE, og et
+        // stillestående billede midt i filmen ligner en fejl. Dér er panoreringen bedre.
+        //
+        // Så i stedet for at kassere sættes farten ned, til den bevægelse der er, rækker hele
+        // vejen. Et klip med 1,1 sekunds bevægelse spilles ved halv fart og fylder de 2,07
+        // sekunder uden et eneste frosset billede. Først når selv den halve fart ikke slår til,
+        // falder vi tilbage til 2D — og så er der reelt heller ingen bevægelse at vise.
+        const kraevetFart = (m.moving * 1000) / (BEAT_MS * CLIP_MIN_BEATS);
+        if (kraevetFart >= KLIP_FART_MIN) {
+          klipFart = kraevetFart;
+          movingBeats = CLIP_MIN_BEATS;
+        } else {
         // Barely moves at all. Keep the arc, show the 2D move instead.
         useClip = false;
+        }
       } else {
         clipStart = m.start;
         // HALEN BRUGES IKKE.
