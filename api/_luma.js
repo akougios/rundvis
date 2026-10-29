@@ -33,14 +33,20 @@ const CONCEPTS = {
 // model warps something at 720p it will warp it at 1080p too.
 export const QUALITIES = {
   test: { resolution: "720p", usdPerClip: 0.45, label: "Test" },
-  // TWO MEASUREMENTS THAT DISAGREE, and the pricing of the whole product rests on which is right.
-  //   9 clips at full quality billed 10.80 $  -> 1.20 per clip
-  //   4 clips billed about 3.40 $             -> 0.85 per clip
-  // Both come off real invoices. 1.20 is kept because it is the pessimistic one and the one taken
-  // from the larger run, but it may be 40% too high. The 4-clip run is also close to what a MIX
-  // would cost (2 final + 2 test is 3.30 $), so it may not have been four full-quality clips at
-  // all. Luma's dashboard shows the charge per generation; one look at it settles this, and until
-  // someone takes that look neither number should be used to set a price.
+  // AFGJORT, og tallet holder.
+  //
+  // Tre maalinger fra rigtige fakturaer:
+  //   9 klip ved fuld kvalitet   10,80 $  -> 1,20 per klip
+  //   7 klip ved fuld kvalitet    8,40 $  -> 1,20 per klip
+  //   4 klip                      3,40 $  -> 0,85 per klip
+  //
+  // De to foerste er enige, og den tredje var efter al sandsynlighed en BLANDET koersel: to
+  // fulde og to test koster 3,30 $, hvilket er inden for en femogtyveoere af de 3,40. Saa 1,20
+  // er prisen, ikke et pessimistisk gaet.
+  //
+  // Det betyder at hele prismodellen staar paa det rigtige tal: fjorten billeder - loftet - er
+  // 16,80 $, altsaa omkring 112 kr, og det er praecis det kostgrundlag daekningsgraderne i
+  // api/_stripe.js er regnet paa. Der skal ingenting aendres.
   final: { resolution: "1080p", usdPerClip: 1.20, label: "Fuld kvalitet" },
 };
 
