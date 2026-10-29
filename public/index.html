@@ -1001,7 +1001,21 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
     // hurtigere og skærer før. Det er også det en fartknap BØR gøre - ikke bare vise det samme
     // klip længere, men bevæge sig anderledes.
     const klipFart = tempo > 0 ? 1 / tempo : 1;
-    let useClip = true, clipStart = 0;
+    // SLUTSKUDDET BRUGER ALDRIG ET KLIP.
+    //
+    // "pull" ovenfor er afslutningen: kameraet trækker ud til hele det uklippede foto. Det er
+    // den normale måde at forlade en bolig på, og det er samtidig det sikreste skud i filmen —
+    // det KONVERGERER mod mæglerens eget billede i stedet for at bevæge sig væk fra det, så
+    // modellen får ikke lejlighed til at finde på noget til allersidst.
+    //
+    // Men useClip stod true for alle skud. Havde det sidste billede fået et AI-klip, spillede
+    // klippet i stedet, og udzoomningen forsvandt — Luma laver et push eller en pan, for det er
+    // dem vi beder om, og den kan ikke vide at det her er en afslutning.
+    //
+    // Klippet bliver stadig genereret, saa en omrokering af billederne ikke efterlader et hul.
+    // Vil man spare det, skal HQ-koerslen springe sidste indeks over - det er 8 kr per bolig,
+    // men saa skal der ogsaa taenkes paa hvad der sker naar maegleren flytter rundt bagefter.
+    let useClip = !isLast, clipStart = 0;
     const m = motionAt(i);
     // isFinite guards the arithmetic below: a malformed measurement would otherwise turn the
     // shot's duration into NaN, and one NaN duration takes down the whole timeline.
