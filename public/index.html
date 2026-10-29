@@ -1698,6 +1698,26 @@ const HIDDEN_TAB_MSG =
   "Optagelsen kræver at denne fane er fremme. Browseren sætter canvas-optagelse på pause i en " +
   "baggrundsfane, og filen bliver tom. Lad fanen være synlig, og prøv igen.";
 
+// FILNAVNET ER ADRESSEN.
+//
+// Hver eneste bolig hed rundvis-gennemgang-16x9.mp4, så en mægler med fem sager havde fem filer
+// med samme navn og et tal i parentes i sin downloadmappe. Adressen er det eneste han kender
+// sagen på, og den står der allerede — den skal bare bruges.
+//
+// Formatet bliver stående i navnet, for man henter typisk den samme bolig i både bredformat og
+// højformat, og uden det ville de to overskrive hinanden.
+function filnavnFra(adresse, format, ext) {
+  const slug = String(adresse || "")
+    .trim()
+    .toLowerCase()
+    .replace(/æ/g, "ae").replace(/ø/g, "oe").replace(/å/g, "aa")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 70)
+    .replace(/-+$/, "");
+  return `${slug || "rundvis-gennemgang"}-${String(format).replace(":", "x")}.${ext}`;
+}
+
 async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, onProgress, onWarn, musicBytes, titles, logo }) {
   if (!window.MediaRecorder) throw new Error("Din browser understøtter ikke videooptagelse. Prøv Chrome eller Safari 17+.");
   const mime = pickRecorderMime();
@@ -3381,7 +3401,7 @@ function Rundvis() {
         onProgress: setExportProgress,
       });
       const ext = blob.type.indexOf("mp4") !== -1 ? "mp4" : "webm";
-      const navn = `rundvis-gennemgang-${format.replace(":", "x")}.${ext}`;
+      const navn = filnavnFra(titles && titles.headline, format, ext);
       const url = URL.createObjectURL(blob);
       setExportFile({ url, name: navn, blob });
       // Knappen siger "Hent", så filen hentes. Før skulle man trykke to gange: én gang på
