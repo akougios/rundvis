@@ -2016,6 +2016,9 @@ function Rundvis() {
   // og i state kun som navn, så siden tegner om når der kommer et nyt.
   const logoRef = useRef(null);
   const [logoNavn, setLogoNavn] = useState("");
+  // Selve logoet, så det kan VISES frem for at stå som et filnavn. "255x0.png" fortæller
+  // ingenting om hvordan mærket ser ud; billedet svarer på spørgsmålet med det samme.
+  const [logoUrl, setLogoUrl] = useState("");
   const [logoFejl, setLogoFejl] = useState("");
   const [musicError, setMusicError] = useState("");
   const [musicOnPreview, setMusicOnPreview] = useState(true);
@@ -2845,6 +2848,7 @@ function Rundvis() {
         }
         logoRef.current = im;
         setLogoNavn(file.name);
+        setLogoUrl(e.target.result);
         // Gemmes på kontoen, så den næste på kontoret ikke skal finde filen frem igen.
         // Uden login er der ingen konto at gemme på, og så er det bare denne session.
         if (bruger) {
@@ -2860,7 +2864,7 @@ function Rundvis() {
     læser.onerror = () => setLogoFejl("Kunne ikke læse filen.");
     læser.readAsDataURL(file);
   };
-  const fjernLogo = () => { logoRef.current = null; setLogoNavn(""); setLogoFejl(""); };
+  const fjernLogo = () => { logoRef.current = null; setLogoNavn(""); setLogoUrl(""); setLogoFejl(""); };
 
   // Hvornår der overhovedet skal lyde noget. Selve synkroniseringen ligger i synkMusik; her
   // afgøres kun om musikken er i spil, så den aldrig kører bag et andet trin.
@@ -3329,6 +3333,7 @@ function Rundvis() {
           if (afbrudt || !im.naturalWidth) return;
           logoRef.current = im;
           setLogoNavn(j.logo.navn || "logo");
+          setLogoUrl(im.src || "");
         };
         im.src = j.logo.url;
       } catch (e) { /* intet logo gemt endnu er det normale */ }
@@ -3337,48 +3342,15 @@ function Rundvis() {
     return () => { afbrudt = true; };
   }, [bruger]);
 
-  // DELING.
+  // DELING ER TAGET UD.
   //
-  // Der findes ingen måde at lægge en video på Instagram, TikTok eller Facebook ved at trykke
-  // på en knap i en hjemmeside. De tre har hver sit API, og alle tre kræver det samme: en
-  // registreret app, erhvervskonto hos kunden, og at kunden logger ind og giver os lov. Det er
-  // en integration, ikke en knap, og den kan først bygges når der er kunder at bygge den for.
+  // Her laa en delemenu, tre platformsgenveje og forklaringen paa hvorfor de kun halvt virkede.
+  // Genvejene hentede filen og aabnede platformens forside - to skridt, og ingen af dem det man
+  // bad om. Rigtig deling kraever en registreret app hos Meta, erhvervskonto hos kunden og
+  // kundens samtykke. Det er en integration, ikke en knap.
   //
-  // Det der FAKTISK virker, er styresystemets egen delemenu. På en telefon åbner den med
-  // Instagram og TikTok i listen, og videoen følger med — altså præcis den ene handling du
-  // ville have. Derfor er det den primære knap når browseren kan det.
-  //
-  // Kan den ikke — og det kan en pc som regel ikke — henter vi filen og åbner platformens egen
-  // side, så mægleren kun skal trække filen ind. Det er to skridt i stedet for ét, men det er
-  // ærligt, og det virker i dag.
-  const kanDeleFil = (fil) => {
-    try {
-      return Boolean(navigator.canShare && fil && navigator.canShare({ files: [fil] }));
-    } catch (e) { return false; }
-  };
-
-  const delVideo = async () => {
-    if (!exportFile || !exportFile.blob) return;
-    const fil = new File([exportFile.blob], exportFile.name, { type: exportFile.blob.type || "video/webm" });
-    if (!kanDeleFil(fil)) return;
-    try {
-      await navigator.share({ files: [fil], title: titles.headline || "Boligvideo" });
-    } catch (e) { /* afbrudt af brugeren er ikke en fejl */ }
-  };
-
-  const PLATFORME = [
-    { id: "instagram", navn: "Instagram", url: "https://www.instagram.com/" },
-    { id: "tiktok", navn: "TikTok", url: "https://www.tiktok.com/upload" },
-    { id: "facebook", navn: "Facebook", url: "https://www.facebook.com/" },
-  ];
-
-  const aabnPlatform = (p) => {
-    // Filen hentes først. Åbner vi bare siden, står mægleren med en upload-knap og ingen fil.
-    const a = document.createElement("a");
-    a.href = exportFile.url; a.download = exportFile.name;
-    document.body.appendChild(a); a.click(); a.remove();
-    window.open(p.url, "_blank", "noopener");
-  };
+  // Indtil den godkendelse er paa plads er det aerligere at lade vaere at love det. Mægleren
+  // henter filen og laegger den op selv, og det er praecis lige saa mange skridt som foer.
 
   const handleExport = async (format) => {
     if (exportStatus === "working" || flythroughStills.length === 0) return;
@@ -4033,17 +4005,21 @@ function Rundvis() {
                 </div>
               )}
 
+              {/* ÉT FELT TIL DET HELE, ikke tre afsnit.
+                  Tekst, logo og musik stod før som tre sektioner med hver sin overskrift, sin
+                  brødtekst og sin skillelinje — tre store afsnit til to tekstfelter og to
+                  upload-knapper. Det var hovedparten af teksten på siden.
+                  Forklaringerne er skåret væk hvor de sagde noget man kan se: at tomme felter
+                  giver en video uden tekst står nu som placeholder i felterne, og at logoet står
+                  nederst til højre kan man se på videoen ovenfor. Tilbage er kun det råd man
+                  ikke kan gætte: at en PNG med gennemsigtig baggrund ser bedst ud. */}
               {flythroughStatus === "done" && flythroughStills.length > 0 && (
                 <div className="mb-6 pt-6" style={{ borderTop: `1px solid ${LINE}` }}>
-                  <p className="text-sm mb-1" style={{ color: TEXT }}>Tekst på videoen</p>
-                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>
-                    Lad felterne stå tomme for en video uden tekst.
-                  </p>
-                  <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="flex flex-col sm:flex-row gap-2 mb-5">
                     <input
                       value={titles.headline}
                       onChange={(e) => setTitles((t) => ({ ...t, headline: e.target.value.slice(0, 48) }))}
-                      placeholder="Strandvejen 12, 2900 Hellerup"
+                      placeholder="Adresse — lad stå tom for ingen tekst"
                       className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
                       style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}`, color: TEXT }}
                     />
@@ -4055,45 +4031,34 @@ function Rundvis() {
                       style={{ backgroundColor: SURFACE, border: `1px solid ${LINE}`, color: TEXT }}
                     />
                   </div>
-                </div>
-              )}
 
-              {flythroughStatus === "done" && flythroughStills.length > 0 && (
-                <div className="mb-6 pt-6" style={{ borderTop: `1px solid ${LINE}` }}>
-                  <p className="text-sm mb-1" style={{ color: TEXT }}>Jeres logo</p>
-                  <p className="text-[11px] mb-3" style={{ color: MUTED }}>
-                    Står nederst til højre hele videoen. En PNG med gennemsigtig baggrund ser bedst ud.
-                  </p>
                   <div className="flex flex-wrap items-center gap-3">
                     <label className="flex items-center gap-2 px-4 py-2 rounded-full text-sm cursor-pointer"
                            style={{ border: `1px solid ${LINE}`, color: TEXT }}>
                       <Icon name="upload" size={15} />
-                      {logoNavn ? "Skift logo" : "Vælg logofil"}
+                      {logoNavn ? "Skift logo" : "Jeres logo"}
                       <input type="file" accept="image/png,image/jpeg,image/svg+xml" className="hidden"
                              onChange={(e) => handleLogoFile(e.target.files && e.target.files[0])} />
                     </label>
                     {logoNavn && (
                       <>
-                        <span className="text-[11px]" style={{ color: MUTED }}>{logoNavn}</span>
+                        {/* Logoet selv, ikke dets filnavn. */}
+                        {logoUrl && (
+                          <img src={logoUrl} alt="" style={{ height: 22, width: "auto", maxWidth: 70, objectFit: "contain" }} />
+                        )}
                         <button onClick={fjernLogo} className="text-[11px]" style={{ color: MUTED }}>Fjern</button>
                       </>
                     )}
-                  </div>
-                  {logoFejl && <p className="text-xs mt-2" style={{ color: AMBER }}>{logoFejl}</p>}
-                </div>
-              )}
+                    {!logoNavn && (
+                      <span className="text-[11px]" style={{ color: MUTED }}>PNG med gennemsigtig baggrund</span>
+                    )}
 
-              {flythroughStatus === "done" && flythroughStills.length > 0 && (
-                <div className="mb-6 pt-6" style={{ borderTop: `1px solid ${LINE}` }}>
-                  <p className="text-sm mb-3" style={{ color: TEXT }}>Musik</p>
-
-                  <div className="flex flex-wrap items-center gap-3">
                     <label
                       className="flex items-center gap-2 px-4 py-2 rounded-full text-sm cursor-pointer"
                       style={{ border: `1px solid ${LINE}`, color: TEXT }}
                     >
                       <Icon name="music" size={14} />
-                      {musicName ? "Skift musik" : "Vælg lydfil"}
+                      {musicName ? "Skift musik" : "Musik"}
                       <input
                         type="file"
                         accept="audio/*"
@@ -4101,12 +4066,21 @@ function Rundvis() {
                         onChange={(e) => handleMusicFile(e.target.files && e.target.files[0])}
                       />
                     </label>
-
-                    {/* Lydknappen sad her. Den er flyttet op ved siden af videoen, hvor man
-                        kigger når man slår lyden fra. */}
+                    {musicName && (
+                      <span className="text-[11px]" style={{ color: MUTED }}>{musicName.split(" · ")[0]}</span>
+                    )}
                   </div>
 
-                  {musicName && <p className="text-[11px] mt-2" style={{ color: TEXT }}>{musicName}</p>}
+                  {/* Det her er ikke pedanteri: Instagram og Facebook fjerner eller muter lyden
+                      paa opslag med kommerciel musik, og saa ligner det at Rundvis har leveret en
+                      stum video. Det skal staa hvor man vaelger nummeret, ikke i en hjaelpetekst
+                      ingen laeser. */}
+                  {musicName && (
+                    <p className="text-[11px] mt-2" style={{ color: MUTED }}>
+                      Brug musik du har rettighederne til — Instagram og Facebook fjerner lyden på opslag med kendte numre.
+                    </p>
+                  )}
+                  {logoFejl && <p className="text-xs mt-2" style={{ color: AMBER }}>{logoFejl}</p>}
                   {musicError && <p className="text-xs mt-2" style={{ color: AMBER }}>{musicError}</p>}
                 </div>
               )}
@@ -4116,10 +4090,15 @@ function Rundvis() {
                   <button
                     onClick={() => handleExport(previewFormat)}
                     disabled={exportStatus === "working"}
-                    className="rounded-full text-sm"
+                    className="rounded-full text-sm font-medium"
                     style={{
-                      border: `1px solid ${TEXT}`,
-                      color: TEXT,
+                      // Fyldt, ikke outline. Det her ER handlingen man kom efter. Før var den en
+                      // tynd kontur, mens den fyldte mørke knap på siden var "del til Instagram"
+                      // — altså den sekundære handling, der bare åbnede en app. Vægten var vendt
+                      // om. Delingen er væk nu, og den fyldte knap hører til her.
+                      backgroundColor: ACCENT,
+                      color: "#fff",
+                      border: `1px solid ${ACCENT}`,
                       padding: "11px 26px",
                       opacity: exportStatus === "working" ? 0.45 : 1,
                       cursor: exportStatus === "working" ? "not-allowed" : "pointer",
@@ -4163,36 +4142,26 @@ function Rundvis() {
                           Kunne ikke gemmes under din profil — hent den ned her.
                         </p>
                       )}
+                      {/* DELEKNAPPERNE ER FJERNET.
+                          Der stod en fyldt "Send til Instagram, TikTok…", tre pills med
+                          Instagram, TikTok og Facebook, og en forklarende sætning — fem
+                          kontroller og et afsnit til ét job. Og de gjorde reelt ingenting:
+                          genvejene åbnede bare appens hjemmeside med filen hentet ned ved siden
+                          af. Rigtig deling kræver Metas godkendelse, og indtil den er på plads
+                          er det ærligere ikke at love det.
+                          Tilbage er filen, som man henter og selv lægger op. */}
                       <a href={exportFile.url} download={exportFile.name}
                          className="inline-flex items-center gap-1.5 text-xs" style={{ color: ACCENT }}>
                         <Icon name="arrowDown" size={13} />
                         Hent igen
                       </a>
 
-                      {/* Delemenuen først, hvor den findes: dér er det ét tryk til Instagram.
-                          Ellers de tre genveje, som henter filen og åbner siden. */}
-                      <div className="flex flex-wrap items-center gap-2 mt-3">
-                        {kanDeleFil(exportFile.blob && new File([exportFile.blob], exportFile.name, { type: exportFile.blob.type || "video/webm" })) && (
-                          <button onClick={delVideo}
-                            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs"
-                            style={{ backgroundColor: ACCENT, color: "#fff" }}>
-                            <Icon name="share" size={13} /> Send til Instagram, TikTok…
-                          </button>
-                        )}
-                        {PLATFORME.map((pf) => (
-                          <button key={pf.id} onClick={() => aabnPlatform(pf)}
-                            className="px-3 py-1.5 rounded-full text-xs"
-                            style={{ border: `1px solid ${LINE}`, color: TEXT }}>
-                            {pf.navn}
-                          </button>
-                        ))}
-                      </div>
-                      <p className="text-[10px] mt-2" style={{ color: MUTED }}>
-                        {kanDeleFil(exportFile.blob && new File([exportFile.blob], exportFile.name, { type: exportFile.blob.type || "video/webm" }))
-                          ? "Vælg Instagram eller TikTok i menuen — videoen følger med og er klar til at lægge op."
-                          : bruger
-                            ? "På computer kan videoen ikke sendes direkte til apperne. Knapperne henter den ned og åbner siden. Vil du poste fra telefonen, ligger videoen under din profil i 30 dage — åbn Rundvis på telefonen og send den derfra."
-                            : "På computer kan videoen ikke sendes direkte til apperne. Knapperne henter den ned og åbner siden, hvor du lægger den op."}
+                      {/* Modellen kan finde på ting — en facade der skifter materiale, en bold
+                          der triller over et bord. Halevagten gør det sjældnere, men ikke
+                          umuligt, og en mægler hæfter selv for hvordan en bolig fremstilles.
+                          Linjen står hvor filen bliver hentet, ikke i en hjælpetekst. */}
+                      <p className="text-[11px] mt-3" style={{ color: MUTED }}>
+                        Se videoen igennem inden du lægger den op.
                       </p>
                       {exportFile.name.endsWith(".webm") && (
                         <p className="text-[10px] mt-1" style={{ color: MUTED }}>
