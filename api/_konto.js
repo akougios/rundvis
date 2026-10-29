@@ -12,6 +12,10 @@
 const url = () => (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
 const service = () => process.env.SUPABASE_SERVICE_KEY || "";
 
+// Den adresse en afvist bruger skal skrive til. Staar ogsaa i public/index.html som KONTAKT_MAIL;
+// de to skal foelges ad, og det er derfor den staar som en konstant og ikke inde i en saetning.
+const KONTAKT_MAIL = process.env.KONTAKT_MAIL || "akougios@gmail.com";
+
 export function supabaseErSat() {
   return Boolean(url() && service());
 }
@@ -176,9 +180,12 @@ export async function maaBruge(req, res, { kraevAbonnement = true } = {}) {
         const efter = brugt.size + (nyBolig ? 1 : 0);
         if (efter > gratis) {
           res.status(402).json({
+            // Adressen SKAL staa i selve beskeden. Der stod "skriv til os" uden at sige hvem, og
+            // den besked moeder man praecis naar man har brugt sin sidste gratis bolig - altsaa
+            // paa det daarligste tidspunkt at sende nogen ud at lede.
             error: gratis > 0
-              ? `Du har brugt dine ${gratis} gratis boliger. Skriv til os for at fortsætte.`
-              : "Opgradering kræver et abonnement. Den gratis video kan du lave som du vil.",
+              ? `Du har brugt dine ${gratis} gratis boliger. Skriv til ${KONTAKT_MAIL} for at fortsætte.`
+              : `Opgradering kræver et abonnement. Den gratis video kan du lave som du vil — skriv til ${KONTAKT_MAIL} hvis du vil høre mere.`,
             needsSubscription: true,
             status: konto.abonnement_status,
             brugteBoliger: brugt.size,
