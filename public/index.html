@@ -1154,7 +1154,15 @@ function vignetteFor(octx, W, H) {
 // whole pipeline to make look cheap, so: light weight, wide letter-spacing, sized relative to the
 // frame so it holds at 1080p and in the preview alike, and set over a soft scrim rather than
 // dropped straight onto the picture.
-const TITLE_FONT = '"Helvetica Neue", Inter, system-ui, -apple-system, sans-serif';
+// Samme skrift i videoen som paa siden. Den stod foer som Helvetica Neue, altsaa systemets egen
+// — og saa saa den faerdige film ud som noget andet end produktet den kom fra, og anderledes paa
+// en Mac end paa en pc. Instrument Sans hentes alligevel til siden.
+//
+// Faelden: et canvas der tegner FOER fonten er hentet, falder stille tilbage til systemskriften.
+// I afspilleren retter det sig selv ved naeste frame, men eksporten er ét gennemloeb — derfor
+// ventes der paa document.fonts i exportFlythroughVideo, ellers kunne en fil blive hentet med
+// den forkerte skrift bagt ind.
+const TITLE_FONT = '"Instrument Sans", "Helvetica Neue", Inter, system-ui, sans-serif';
 
 function scrim(octx, W, H, from, strength) {
   const g = octx.createLinearGradient(0, from === "bottom" ? H : 0, 0, from === "bottom" ? H * 0.55 : H * 0.45);
@@ -1239,9 +1247,12 @@ function drawTitles(octx, W, H, titles, idx, lastIdx, local, durationMs) {
       octx.fillText(head.toUpperCase(), cx, Math.round(H * 0.79));
     }
     if (agent) {
-      const size = tilpasSkrift(octx, agent, W * 0.72, Math.round(W * 0.046), 300, 0.02);
+      // Vaegt 400 og ikke 300: Instrument Sans har fire vaegte og starter ved 400. Bad vi om
+      // 300, ville browseren enten syntetisere en tynd variant eller falde tilbage, og
+      // slutkortet ville se anderledes ud end resten.
+      const size = tilpasSkrift(octx, agent, W * 0.72, Math.round(W * 0.046), 400, 0.02);
       octx.fillStyle = "rgba(255,255,255,0.97)";
-      octx.font = `300 ${size}px ${TITLE_FONT}`;
+      octx.font = `400 ${size}px ${TITLE_FONT}`;
       if ("letterSpacing" in octx) octx.letterSpacing = `${Math.round(size * 0.02)}px`;
       octx.fillText(agent, cx, Math.round(H * 0.86));
     }
@@ -1819,6 +1830,10 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
   // receives nothing and the recording comes out as a zero-byte file. Caught here rather than
   // handed to the user as a download link that yields a broken file.
   if (document.hidden) throw new Error(HIDDEN_TAB_MSG);
+  // Skrifterne skal vaere paa plads foer der tegnes en eneste frame. Uden det her kan de
+  // foerste sekunder af filen have systemskriften og resten den rigtige.
+  try { if (document.fonts && document.fonts.ready) await document.fonts.ready; } catch (e) {}
+
   const fmt = EXPORT_FORMATS[format];
   const w = fmt.w, h = fmt.h;
 
