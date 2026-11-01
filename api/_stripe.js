@@ -59,7 +59,16 @@ export const PLANER = {
   kaede: {
     navn: "Kæde",
     beskrivelse: "Til flere kontorer",
-    oere: 1300000,                // fra 13.000 kr — ~433 kr per bolig
+    // INGEN PRIS UDADTIL. Tallet her bruges ikke til noget - Kaede har ingen koebsknap, og
+    // api/konto.js sender hverken pris eller antal boliger med for en plan der forhandles.
+    //
+    // De 13.000 for 30 boliger stod paa siden og var forkert sat: et enkelt travlt kontor bruger
+    // tyve boliger om maaneden, saa tredive daekker halvanden butik. En kaede med ti kontorer
+    // laver to hundrede. Prissat per kontor - 8.995 for det foerste og faldende derefter - er
+    // samme kaede omkring 72.000 kr om maaneden, ikke 13.000.
+    //
+    // Derfor forhandles den per kontor, og kortet spoerger i stedet hvor mange butikker der er.
+    oere: 1300000,
     inkluderede: 30,
     slags: "aftale",
   },

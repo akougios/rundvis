@@ -4377,20 +4377,35 @@ function Rundvis() {
                       <div key={plan.noegle} className="rounded-2xl p-5" style={{ border: `1px solid ${LINE}` }}>
                         <div className="flex items-baseline justify-between mb-1">
                           <span className="text-sm" style={{ color: TEXT }}>{plan.navn}</span>
+                          {/* KÆDE HAR INGEN PRIS PÅ KORTET.
+                              Der stod "fra 13.000 kr", og det tal gjorde skade. En kæde
+                              forhandles alligevel — der er ingen købsknap — så tallet var kun et
+                              anker, og et forkert et: tredive boliger er halvanden butik, mens en
+                              kæde med ti kontorer laver to hundrede. Direktøren læser enten
+                              13.000 som hele prisen, eller som at vi ikke har forstået hvor
+                              store de er. Begge dele gør samtalen sværere end den behøver.
+                              Uden tal starter den med det rigtige spørgsmål: hvor mange butikker. */}
                           <span className="font-display" style={{ fontSize: 20, color: TEXT }}>
-                            {aftale && <span className="text-[11px]" style={{ color: MUTED }}>fra </span>}
-                            {plan.kr.toLocaleString("da-DK")} kr
-                            {/* Enkelt er ét køb. Et "/md" der ikke er sandt er den slags
-                                småløgn en kunde opdager på kontoudtoget. */}
-                            {plan.slags !== "engang" &&
-                              <span className="text-[11px]" style={{ color: MUTED }}> /md</span>}
+                            {aftale ? (
+                              <span style={{ fontSize: 15, color: MUTED }}>Efter antal kontorer</span>
+                            ) : (
+                              <>
+                                {plan.kr.toLocaleString("da-DK")} kr
+                                {/* Enkelt er ét køb. Et "/md" der ikke er sandt er den slags
+                                    småløgn en kunde opdager på kontoudtoget. */}
+                                {plan.slags !== "engang" &&
+                                  <span className="text-[11px]" style={{ color: MUTED }}> /md</span>}
+                              </>
+                            )}
                           </span>
                         </div>
                         <p className="text-[11px] mb-1" style={{ color: MUTED }}>{plan.beskrivelse}</p>
                         <p className="text-[11px] mb-3" style={{ color: MUTED }}>
-                          {plan.inkluderede === 1
-                            ? "1 bolig"
-                            : `${plan.inkluderede} boliger — ${plan.perBolig.toLocaleString("da-DK")} kr per bolig`}
+                          {aftale
+                            ? "Alle kontorer under én aftale. Prisen falder per kontor."
+                            : plan.inkluderede === 1
+                              ? "1 bolig"
+                              : `${plan.inkluderede} boliger — ${plan.perBolig.toLocaleString("da-DK")} kr per bolig`}
                         </p>
                         {/* Samme seks linjer på alle kort. Det man ikke får bliver streget over
                             frem for at forsvinde, så to kort kan læses ved siden af hinanden. */}

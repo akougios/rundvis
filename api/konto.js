@@ -26,16 +26,22 @@ async function brugtIPerioden(kontoId, fra) {
 }
 
 export default async function handler(req, res) {
+  // En plan der forhandles sender ikke et tal med. Kaede stod med "fra 13.000 kr", og det var
+  // et anker vi ikke oenskede: en kaede med ti kontorer laver to hundrede boliger om maaneden,
+  // ikke tredive, saa tallet fortalte enten en forkert pris eller at vi ikke havde forstaaet
+  // kundens stoerrelse. Det er ikke nok at skjule det i frontenden - saa staar det stadig i
+  // svaret fra API'et og kan laeses af enhver der kigger efter.
   const planer = Object.entries(PLANER).map(([noegle, p]) => ({
     noegle, navn: p.navn, beskrivelse: p.beskrivelse,
-    kr: Math.round(p.oere / 100), inkluderede: p.inkluderede,
+    kr: p.slags === "aftale" ? null : Math.round(p.oere / 100),
+    inkluderede: p.slags === "aftale" ? null : p.inkluderede,
     // Hele listen, hver linje med om DEN her plan har den. Frontenden streger resten over
     // frem for at udelade dem, så kortene kan læses ved siden af hinanden.
     fordele: FORDELE.map((f) => ({ tekst: f.tekst, med: f.har.includes(noegle) })),
     slags: p.slags,
     // Stykprisen regnes her frem for i frontenden, så de to ikke kan komme til at vise
     // forskellige tal for samme plan.
-    perBolig: Math.round(p.oere / 100 / Math.max(1, p.inkluderede)),
+    perBolig: p.slags === "aftale" ? null : Math.round(p.oere / 100 / Math.max(1, p.inkluderede)),
   }));
 
   // Menuen skal kunne vise planerne selv når intet er sat op endnu. "Her er hvad det koster"
