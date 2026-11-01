@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privatlivspolitik — Rundvis</title>
+<meta name="robots" content="index,follow">
+<link rel="stylesheet" href="/juridisk.css">
+</head>
+<body>
+
+<header>
+  <div class="spalte">
+    <a class="navn" href="/">Rundvis</a>
+    <span style="font-size:13px;color:var(--daempet)">Privatlivspolitik</span>
+  </div>
+</header>
+
+<main class="spalte">
+
+<h1>Privatlivspolitik</h1>
+<p class="dato">Senest opdateret 1. november 2026</p>
+
+<div class="udfyld">
+  <strong>Skal udfyldes inden siden er offentlig:</strong> navn på den juridiske enhed, adresse
+  og CVR-nummer. Indtil selskabet er stiftet, er det dig personligt der er dataansvarlig, og så
+  skal dit navn og din adresse stå i stedet. Teksten herunder er et udkast skrevet af en
+  AI-assistent og er ikke juridisk rådgivning — få den læst igennem af en jurist inden I tager
+  betalende kunder ind.
+</div>
+
+<h2>Hvem er ansvarlig</h2>
+<p>
+  Rundvis drives af <strong>[navn / selskab]</strong>, <strong>[adresse]</strong>,
+  CVR <strong>[nummer]</strong>. Spørgsmål om dine oplysninger sendes til
+  <a href="mailto:akougios@gmail.com">akougios@gmail.com</a>.
+</p>
+
+<h2>Hvad vi behandler</h2>
+<table>
+  <tr><th>Oplysning</th><th>Hvorfor</th></tr>
+  <tr><td>E-mailadresse og adgangskode</td><td>For at du kan logge ind og have din egen konto. Adgangskoden gemmes krypteret af Supabase; vi kan ikke se den.</td></tr>
+  <tr><td>Boligfotos du lægger op</td><td>De er råmaterialet til videoen. De sendes til videomodellen, som skal kunne hente dem.</td></tr>
+  <tr><td>Jeres logo</td><td>Lægges på videoen og gemmes på kontoen, så I ikke skal finde filen frem hver gang.</td></tr>
+  <tr><td>Musik du lægger op</td><td>Lægges på videoen. Gemmes ikke på vores servere.</td></tr>
+  <tr><td>Færdige videoer</td><td>Så du kan hente dem igen fra en anden enhed.</td></tr>
+  <tr><td>Forbrug: hvilke boliger, hvor mange klip, hvornår</td><td>Grundlag for fakturering og for at vide hvad tjenesten koster at drive.</td></tr>
+  <tr><td>Betalingsoplysninger</td><td>Håndteres udelukkende af Stripe. Vi ser aldrig kortnumre.</td></tr>
+</table>
+
+<h2>Billeder af andres boliger</h2>
+<p>
+  Et boligfoto kan indeholde personoplysninger — en adresse, indbo, og undtagelsesvis personer.
+  Når du som mægler lægger billeder op, er det dig der afgør hvad der behandles og hvorfor;
+  Rundvis behandler dem på dine vegne. Du skal derfor have ret til at bruge billederne og til at
+  lade dem behandle, og det er dit ansvar over for sælger og over for eventuelle personer på
+  billederne.
+</p>
+<p>
+  Vi bruger ikke dine billeder til andet end at lave din video. De bliver ikke brugt til at træne
+  modeller af os, og vi viser dem ikke frem til andre.
+</p>
+
+<h2>Hvem vi deler med</h2>
+<p>For at tjenesten kan virke, behandles data af disse leverandører:</p>
+<table>
+  <tr><th>Leverandør</th><th>Hvad</th><th>Hvor</th></tr>
+  <tr><td>Supabase</td><td>Konti, logo, gemte videoer, forbrug</td><td><strong>[bekræft region — EU eller USA]</strong></td></tr>
+  <tr><td>Vercel</td><td>Drift af siden og lagring af de uploadede boligfotos</td><td>EU/USA</td></tr>
+  <tr><td>Luma AI (Luma Labs, USA)</td><td>Selve videogenereringen. Boligfotos sendes hertil.</td><td>USA</td></tr>
+  <tr><td>Stripe</td><td>Betaling og abonnement</td><td>EU/USA</td></tr>
+</table>
+<p>
+  Overførslen til USA sker på grundlag af EU-Kommissionens standardkontraktbestemmelser eller
+  EU-U.S. Data Privacy Framework, afhængigt af den enkelte leverandør.
+</p>
+
+<h2>Hvor længe vi gemmer</h2>
+<ul>
+  <li><strong>Konto og logo:</strong> så længe kontoen findes. Sletter du kontoen, slettes de.</li>
+  <li><strong>Færdige videoer:</strong> 30 dage, hvorefter de slettes automatisk.</li>
+  <li><strong>Uploadede boligfotos:</strong> <strong>[se boksen nedenfor]</strong></li>
+  <li><strong>Forbrugsoplysninger:</strong> 5 år, fordi de indgår i bogføringen (bogføringsloven).</li>
+</ul>
+
+<div class="udfyld">
+  <strong>Skal rettes i koden, ikke kun i teksten:</strong> de uploadede boligfotos lægges i dag
+  på Vercel Blob med offentlig adgang og bliver aldrig slettet. Adresserne er tilfældige og ikke
+  til at gætte, men de udløber ikke. Billederne skal være offentligt tilgængelige i det øjeblik
+  videomodellen henter dem — derefter skal de væk. Indtil det er rettet, kan den her side ikke
+  love noget om sletning af billeder.
+</div>
+
+<h2>Dine rettigheder</h2>
+<p>Du har ret til at:</p>
+<ul>
+  <li>få indsigt i hvilke oplysninger vi har om dig</li>
+  <li>få rettet forkerte oplysninger</li>
+  <li>få slettet dine oplysninger</li>
+  <li>få udleveret dine oplysninger i et almindeligt format</li>
+  <li>gøre indsigelse mod behandlingen</li>
+</ul>
+<p>
+  Skriv til <a href="mailto:akougios@gmail.com">akougios@gmail.com</a>, så svarer vi inden for en
+  måned. Er du utilfreds med svaret, kan du klage til Datatilsynet, Carl Jacobsens Vej 35,
+  2500 Valby, <a href="https://www.datatilsynet.dk">datatilsynet.dk</a>.
+</p>
+
+<h2>Cookies</h2>
+<p>
+  Rundvis bruger ikke cookies til statistik eller markedsføring. Din login-session gemmes lokalt i
+  browseren, så du ikke skal logge ind igen hver gang. Den forsvinder når du logger ud.
+</p>
+
+<h2>Sikkerhed</h2>
+<p>
+  Adgang til data kræver login. Databasen er beskyttet med row level security, så en bruger kun
+  kan se sin egen kontos oplysninger. Trafikken er krypteret. Sker der et brud på sikkerheden der
+  udgør en risiko for dig, giver vi dig besked.
+</p>
+
+<h2>Ændringer</h2>
+<p>
+  Ændrer vi politikken væsentligt, skriver vi til den mail der står på kontoen. Datoen øverst
+  viser hvornår siden sidst er opdateret.
+</p>
+
+<footer>
+  <a href="/">Rundvis</a>
+  <a href="/betingelser.html">Betingelser</a>
+  <a href="mailto:akougios@gmail.com">Kontakt</a>
+</footer>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,114 @@
+/* Samme palet og samme skrifter som appen, så de to sider ikke føles som et andet produkt.
+   Værdierne står også i public/index.html; ændres de ét sted, skal de ændres begge. */
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@400;500;600&display=swap');
+
+:root {
+  --ink: #F1F2F0;
+  --flade: #FFFFFF;
+  --tekst: #171B1A;
+  --daempet: #6E7570;
+  --accent: #1F3A34;
+  --linje: #DCDFDA;
+  --rav: #8A6A2F;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--tekst);
+  font-family: 'Instrument Sans', system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+header {
+  border-bottom: 1px solid var(--linje);
+}
+
+.spalte {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+header .spalte {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-top: 18px;
+  padding-bottom: 18px;
+}
+
+.navn {
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-size: 26px;
+  letter-spacing: -0.01em;
+  color: var(--tekst);
+  text-decoration: none;
+}
+
+main.spalte { padding-top: 48px; padding-bottom: 96px; }
+
+h1 {
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-weight: 400;
+  font-size: 42px;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  margin: 0 0 8px;
+}
+
+.dato { color: var(--daempet); font-size: 13px; margin: 0 0 40px; }
+
+h2 {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 40px 0 10px;
+  padding-top: 24px;
+  border-top: 1px solid var(--linje);
+}
+
+h2:first-of-type { border-top: 0; padding-top: 0; }
+
+p, li { color: var(--tekst); }
+ul { padding-left: 20px; margin: 10px 0; }
+li { margin-bottom: 6px; }
+
+a { color: var(--accent); }
+
+/* Det der mangler et rigtigt svar, skal SES at mangle - ikke gemme sig i brødteksten
+   og blive opdaget af en kunde et halvt år senere. */
+.udfyld {
+  background: #F6EFE0;
+  border: 1px solid var(--rav);
+  color: var(--rav);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 13px;
+  margin: 16px 0;
+}
+
+.udfyld strong { color: var(--rav); }
+
+table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--linje); vertical-align: top; }
+th { font-weight: 600; background: var(--flade); }
+
+footer {
+  border-top: 1px solid var(--linje);
+  margin-top: 64px;
+  padding-top: 20px;
+  font-size: 13px;
+  color: var(--daempet);
+}
+
+footer a { color: var(--daempet); margin-right: 18px; }
+
+@media (max-width: 560px) {
+  h1 { font-size: 32px; }
+  main.spalte { padding-top: 32px; }
+  table, th, td { font-size: 13px; }
+}

@@ -4228,6 +4228,17 @@ function Rundvis() {
         )}
       </main>
 
+      {/* De to juridiske sider. Hører i bunden af hver side, ikke gemt bag profilmenuen: en
+          mæglerkædes compliance leder efter dem dér, og Meta kræver et privatlivslink hvis vi
+          nogensinde søger om at kunne poste direkte. Almindelige a-tags — de to sider er
+          statiske og deler ikke kode med appen. */}
+      <footer className="max-w-3xl mx-auto px-5 pb-10 pt-8 text-[11px]"
+              style={{ color: MUTED, borderTop: `1px solid ${LINE}`, marginTop: 24 }}>
+        <a href="/betingelser.html" style={{ color: MUTED, marginRight: 18 }}>Betingelser</a>
+        <a href="/privatliv.html" style={{ color: MUTED, marginRight: 18 }}>Privatlivspolitik</a>
+        <a href={`mailto:${KONTAKT_MAIL}`} style={{ color: MUTED }}>Kontakt</a>
+      </footer>
+
       {/* PROFILEN. Skuffe fra højre frem for en lille menu: der skal stå forbrug, plan og
           valgmuligheder, og det er mere end en dropdown kan bære uden at blive et rod. */}
       {menuAaben && (
