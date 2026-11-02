@@ -698,6 +698,9 @@ const KONTAKT_MAIL = "akougios@gmail.com";
 // rettes tre steder den dag der kommer et firmanummer. tel:-formen er uden mellemrum; den
 // laesbare form staar i teksten.
 const KONTAKT_TLF = "+45 53 65 10 98";
+// Versionen af databehandleraftalen. Staar ogsaa i api/konto.js og i public/databehandler.html.
+// Aendres aftalen, skal alle tre foelges ad - og saa skal kunderne acceptere den nye.
+const AFTALE_VERSION = "2026-11-02";
 const KONTAKT_TLF_LINK = "+4553651098";
 // Lifted, slightly cool black floor. Composited with "lighten", so it only touches pixels darker
 // than itself: shadows come off pure black - the filmic part - and everything else is untouched.
@@ -2158,6 +2161,10 @@ function Rundvis() {
   const [email, setEmail] = useState("");
   const [kodeord, setKodeord] = useState("");
   const [opretter, setOpretter] = useState(false);     // tilmelding frem for login
+  // Databehandleraftalen. GDPR artikel 28 kraever en skriftlig aftale mellem maegleren
+  // (dataansvarlig) og os (databehandler), og "skriftlig, herunder i elektronisk form" daekker
+  // et flueben. Det skal saettes FOER kontoen laves, baade ved mail og ved Google.
+  const [aftaleOk, setAftaleOk] = useState(false);
   const [portFejl, setPortFejl] = useState("");
   const [portBesked, setPortBesked] = useState("");
   const [portSender, setPortSender] = useState(false);
@@ -2180,7 +2187,20 @@ function Rundvis() {
       const h = {};
       if (session && session.access_token) h.Authorization = `Bearer ${session.access_token}`;
       const r = await fetch("/api/konto", { headers: h });
-      setProfil(r.ok ? await r.json() : null);
+      const j = r.ok ? await r.json() : null;
+      setProfil(j);
+      // Mangler accepten, og satte brugeren fluebenet foer han blev sendt til Google? Saa
+      // skrives den nu. Serveren skriver kun naar feltet er tomt, saa kaldet er harmloest at
+      // gentage. Daekker ogsaa mail-oprettelse hvor Supabase kraevede en bekraeftelsesmail og
+      // der derfor ingen session var da kontoen blev lavet.
+      if (j && j.konto && j.konto.aftaleMangler) {
+        let gemt = null;
+        try { gemt = localStorage.getItem("rundvis_aftale"); } catch (e) {}
+        if (gemt === AFTALE_VERSION) {
+          await gemAftale();
+          try { localStorage.removeItem("rundvis_aftale"); } catch (e) {}
+        }
+      }
     } catch (e) { setProfil(null); }
     finally { setProfilHenter(false); }
   }, [bruger]);
@@ -2246,12 +2266,34 @@ function Rundvis() {
     finally { setPortSender(false); }
   };
 
+  // Skriver accepten paa kontoen. Kaldes efter en oprettelse er lykkedes - ikke foer, for
+  // kontoen findes foerst naar brugeren er oprettet.
+  //
+  // Fejler den, vaeltes oprettelsen ikke: brugeren HAR sat fluebenet, og at vi ikke fik skrevet
+  // det ned er vores problem. Men den proever igen ved naeste indlaesning, fordi /api/konto
+  // sender aftaleMangler med tilbage.
+  const gemAftale = async () => {
+    try {
+      await kaldMedAdgang("/api/konto", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handling: "aftale", version: AFTALE_VERSION }),
+      }, () => {});
+    } catch (e) { /* bevidst tavs - se noten ovenfor */ }
+  };
+
   const logInd = () => medPortFejl(async () => {
     const k = await hentKlient();
     if (!k) throw new Error("Login er ikke sat op endnu.");
     if (opretter) {
+      if (!aftaleOk) throw new Error("Sæt flueben ved databehandleraftalen for at oprette en konto.");
+      try { localStorage.setItem("rundvis_aftale", AFTALE_VERSION); } catch (e) {}
       const { error } = await k.auth.signUp({ email, password: kodeord });
       if (error) throw new Error(error.message);
+      // Accepten skrives ned her hvis der kom en session med det samme. Kraever Supabase en
+      // bekraeftelsesmail, er der ingen session endnu - saa skrives den ved foerste login,
+      // fordi /api/konto sender aftaleMangler med tilbage og vi forsoeger igen.
+      await gemAftale();
       // Supabase kan være sat til at kræve en bekræftelsesmail. Sig det frem for at lade
       // brugeren stå med en knap der tilsyneladende ikke gjorde noget.
       setPortBesked("Konto oprettet. Tjek din mail hvis vi beder om en bekræftelse.");
@@ -2265,6 +2307,13 @@ function Rundvis() {
   const logIndMedGoogle = () => medPortFejl(async () => {
     const k = await hentKlient();
     if (!k) throw new Error("Login er ikke sat op endnu.");
+    if (opretter) {
+      if (!aftaleOk) throw new Error("Sæt flueben ved databehandleraftalen for at oprette en konto.");
+      // OAuth sender brugeren vaek og tilbage, saa accepten kan ikke foelge med i kaldet. Den
+      // laegges her, og skrives naar vi lander igen og kontoen findes. Det er brugerens eget
+      // flueben, lagt i hans egen browser - ikke en paastand vi finder paa.
+      try { localStorage.setItem("rundvis_aftale", AFTALE_VERSION); } catch (e) {}
+    }
     // Tilbage til samme side bagefter, så man lander hvor man slap frem for på forsiden.
     const { error } = await k.auth.signInWithOAuth({
       provider: "google",
@@ -4343,6 +4392,7 @@ function Rundvis() {
               style={{ color: MUTED, borderTop: `1px solid ${LINE}`, marginTop: 24 }}>
         <a href="/betingelser.html" style={{ color: MUTED, marginRight: 18 }}>Betingelser</a>
         <a href="/privatliv.html" style={{ color: MUTED, marginRight: 18 }}>Privatlivspolitik</a>
+        <a href="/databehandler.html" style={{ color: MUTED, marginRight: 18 }}>Databehandleraftale</a>
         <a href={`mailto:${KONTAKT_MAIL}`} style={{ color: MUTED, marginRight: 18 }}>{KONTAKT_MAIL}</a>
         <a href={`tel:${KONTAKT_TLF_LINK}`} style={{ color: MUTED }}>{KONTAKT_TLF}</a>
       </footer>
@@ -4696,12 +4746,42 @@ function Rundvis() {
                   Du kan lave videoer uden konto. Opgraderingen kræver én.
                 </p>
 
+                {/* DATABEHANDLERAFTALEN.
+                    GDPR artikel 28 kraever en skriftlig aftale mellem maegleren, der er
+                    dataansvarlig for boligbillederne, og os, der behandler dem. "Skriftlig,
+                    herunder i elektronisk form" daekker et flueben - derfor behoever vi ikke
+                    forhandle med hver eneste kunde.
+                    Den staar FOER knapperne, ikke under dem: man skal have set den inden man
+                    trykker, ikke bagefter. */}
+                {opretter && (
+                  <label className="flex items-start gap-2 mb-3 cursor-pointer text-[11px]"
+                         style={{ color: MUTED, lineHeight: 1.5 }}>
+                    <input
+                      type="checkbox"
+                      checked={aftaleOk}
+                      onChange={(e) => { setAftaleOk(e.target.checked); setPortFejl(""); }}
+                      style={{ marginTop: 2, flexShrink: 0 }}
+                    />
+                    <span>
+                      Jeg accepterer{" "}
+                      <a href="/databehandler.html" target="_blank" rel="noopener"
+                         style={{ color: ACCENT }}>databehandleraftalen</a>,{" "}
+                      <a href="/betingelser.html" target="_blank" rel="noopener"
+                         style={{ color: ACCENT }}>betingelserne</a> og{" "}
+                      <a href="/privatliv.html" target="_blank" rel="noopener"
+                         style={{ color: ACCENT }}>privatlivspolitikken</a>.
+                    </span>
+                  </label>
+                )}
+
+
                 {googleMuligt && (<>
                 <button
-                  onClick={logIndMedGoogle} disabled={portSender}
+                  onClick={logIndMedGoogle} disabled={portSender || (opretter && !aftaleOk)}
                   className="w-full rounded-full mb-3 flex items-center justify-center gap-2"
                   style={{ border: `1px solid ${LINE}`, color: TEXT, padding: "10px 0", fontSize: 14,
-                           backgroundColor: SURFACE, opacity: portSender ? 0.5 : 1 }}
+                           backgroundColor: SURFACE,
+                           opacity: portSender || (opretter && !aftaleOk) ? 0.5 : 1 }}
                 >
                   <svg width="15" height="15" viewBox="0 0 48 48" aria-hidden="true">
                     <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.8 6.1C12.3 13.2 17.6 9.5 24 9.5z"/>
@@ -4735,10 +4815,10 @@ function Rundvis() {
                 {portFejl && <p className="text-xs mb-3" style={{ color: AMBER }}>{portFejl}</p>}
                 {portBesked && <p className="text-xs mb-3" style={{ color: ACCENT }}>{portBesked}</p>}
                 <button
-                  onClick={logInd} disabled={portSender || !email || !kodeord}
+                  onClick={logInd} disabled={portSender || !email || !kodeord || (opretter && !aftaleOk)}
                   className="w-full rounded-full mb-3"
                   style={{ backgroundColor: ACCENT, color: "#fff", padding: "11px 0", fontSize: 14,
-                           opacity: portSender || !email || !kodeord ? 0.5 : 1 }}
+                           opacity: portSender || !email || !kodeord || (opretter && !aftaleOk) ? 0.5 : 1 }}
                 >
                   {portSender ? "Et øjeblik…" : opretter ? "Opret konto" : "Log ind"}
                 </button>
