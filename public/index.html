@@ -1070,14 +1070,22 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
         if (kraevetFart >= fartGulv) {
           klipFart = kraevetFart;
           movingBeats = CLIP_MIN_BEATS;
-          // OG SKUDDET SKAL FØLGE MED NED.
+          // HER STOD ET LOFT PÅ nBeats. Det blev målt væk igen, og grunden er værd at huske.
           //
-          // Farten er netop valgt så bevægelsen rækker CLIP_MIN_BEATS — ikke et slag længere.
-          // Bliver skuddet stående på sin oprindelige længde, står resten af det frosset, og
-          // det er præcis den fejl gulvet skulle forhindre. For de midterste skud var det
-          // usynligt, fordi de i forvejen er korte. Åbningen og afslutningen beder om ni slag,
-          // så dér ville 2,6 sekunder af skuddet stå stille.
-          nBeats = Math.min(nBeats, movingBeats);
+          // Tanken var: farten er valgt så bevægelsen rækker CLIP_MIN_BEATS, så et længere skud
+          // må stå frosset bagefter. Det passer ikke, fordi composeShowFrame kalder drawShot2D
+          // for ALLE skud — også dem med klip. Ken Burns-beskæringen ligger oven på klippet og
+          // kører skuddet helt ud. Løber klippets egen bevægelse tør, bliver billedet altså
+          // ved med at bevæge sig; det fryser ikke.
+          //
+          // Målt på en rigtig film: åbningen varede 4,66 sekunder med et nedsat klip, og
+          // bevægelsen lå mellem 0,71 og 1,05 hele vejen igennem. Ingen frosne billeder.
+          //
+          // Det der ER tilbage af bekymringen: ved lav fart når afspilningen længere ind i
+          // klippet, og halen er hvor modellen finder på ting. Men halevagten nedenfor dækker
+          // kun den anden gren, og et loft her ville koste to en halv sekund af åbningen for
+          // en risiko der ikke er set endnu. Så den bliver stående, indtil der er et billede
+          // der viser problemet.
         } else {
         // Barely moves at all. Keep the arc, show the 2D move instead.
         useClip = false;
