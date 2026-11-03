@@ -1,6 +1,6 @@
 // Serverless function (Vercel) — starts one clip for one room photo.
 
-import { LUMA_BASE, buildRequest, lumaKeyOrRespond, explainStatus } from "../_luma.js";
+import { LUMA_BASE, requestVarianter, lumaKeyOrRespond, explainStatus } from "../_luma.js";
 import { maaBruge, skrivForbrug } from "../_konto.js";
 
 export default async function handler(req, res) {
@@ -29,12 +29,11 @@ export default async function handler(req, res) {
     // beats a clip that does not exist. Directional keys like pan_right cannot be verified
     // against Luma's vocabulary from here, so this is what keeps a wrong guess from costing the
     // agent their whole property.
-    const withConcepts = JSON.stringify(buildRequest({ imageUrl, motion, aspectRatio, quality, dir }));
-    const withoutConcepts = JSON.stringify(
-      buildRequest({ imageUrl, motion, aspectRatio, quality, dir, withConcepts: false })
-    );
-    let body = withConcepts;
-    let droppedConcepts = false;
+    // Fire anmodninger, bedst først. Hvert trin giver afkald på præcis én ting, så en afvisning
+    // koster det mindst mulige — og det sidste trin er den anmodning koden sendte før loopet og
+    // de nye prompts kom til, altså en der vides at virke. Se requestVarianter i ../_luma.js.
+    const varianter = requestVarianter({ imageUrl, motion, aspectRatio, quality, dir });
+    let vIdx = 0;
 
     // Several clips are submitted at once so a whole property finishes in minutes rather than
     // half an hour, and a burst is exactly what gets rate-limited. A 429 is therefore an expected
@@ -46,21 +45,19 @@ export default async function handler(req, res) {
     // Waiting that long is the browser's job, so a persistent 429 is handed back marked
     // retryable and the page keeps trying (see runHighQuality in public/index.html).
     let r, text;
-    for (let attempt = 0; ; attempt++) {
+    // Egen tæller til 429. Før delte den budget med 422-forsøgene, så to afviste felter brugte
+    // hele tålmodigheden med rate limits op — og det er to helt forskellige slags fejl.
+    for (let rateForsoeg = 0; ; ) {
       r = await fetch(LUMA_BASE, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-        body,
+        body: JSON.stringify(varianter[vIdx].body),
       });
       text = await r.text();
-      // 422 is Luma refusing a field. The concept key is the only guessed field in the request,
-      // so drop it and try once more before calling this a failure.
-      if (r.status === 422 && !droppedConcepts) {
-        droppedConcepts = true;
-        body = withoutConcepts;
-        continue;
-      }
-      if (r.status !== 429 || attempt >= 1) break;
+      // 422 er Luma der afviser et felt. Gå et trin ned ad varianterne og prøv igen.
+      if (r.status === 422 && vIdx < varianter.length - 1) { vIdx++; continue; }
+      if (r.status !== 429 || rateForsoeg >= 1) break;
+      rateForsoeg++;
       const after = Number(r.headers.get("retry-after"));
       const wait = Number.isFinite(after) && after > 0 ? after * 1000 : 1500;
       await new Promise((done) => setTimeout(done, Math.min(wait, 3000)));

@@ -55,27 +55,43 @@ const CLIP_SECONDS = "5s";
 // Says what the CAMERA does, and states plainly that the room must not change. These models will
 // happily redecorate a room, and for a listing video that is worse than no motion at all: the
 // video has to show the property that is actually for sale.
+// "SCENE" OG IKKE "ROOM". Det foerste billede i en bolig er naesten altid et eksterioer - en
+// facade eller et luftfoto - og at bede modellen om en video "of this exact room" paa et
+// dronebillede af hus og have giver den ingen mening at folde ud. Den mest naerliggende
+// laesning af "fremad" set oppefra er at flyve nedad, og det er praecis hvad der skete:
+// aabningen daler ned over haven som en drone.
+//
+// AFSTANDEN ER NAEVNT, ikke kun farten. Modellen opfinder for at fylde areal den aldrig har
+// set, saa jo laengere kameraet rejser, jo mere skal den finde paa. "Slowly" siger noget om
+// tempo; "a short distance" siger noget om hvor meget ukendt flade der bliver afdaekket.
+//
+// STILLEBILLEDE-RAMMEN til sidst er en positiv formulering af det samme som forbuddene
+// ovenfor. Modeller foelger en beskrivelse af hvad noget ER bedre end en liste over hvad det
+// ikke maa. "A still photograph" er en staerkere instruks end "nothing moves".
 const BASE_PROMPT =
-  "Real estate listing video of this exact room. Photorealistic, filmed on a gimbal. " +
-  "The room, the furniture, the light and the view through the windows all stay exactly as " +
-  "they are in the photo: nothing moves, nothing changes shape, nothing is added or removed. " +
-  "No people, no animals, no text. Only the camera moves.";
+  "Real estate listing video of this exact scene. Photorealistic, filmed on a gimbal. " +
+  "The camera moves only a short distance, and it does not fly or change altitude. " +
+  "Everything in the scene stays exactly as it is in the photo: nothing moves, nothing " +
+  "changes shape, nothing is added or removed. No people, no animals, no text. " +
+  "This is a still photograph, and the only thing that moves is the camera.";
 
 // The prompt says the move in words as well, and carries the direction. It is not redundant with
 // the concept: if a concept key is ever rejected the request is retried on the prompt alone, and
 // the move still comes out roughly right rather than becoming a random drift.
+// "Into the room" er vaek af samme grund som i BASE_PROMPT: det foerste billede er sjaeldent et
+// rum. Og hver bevaegelse siger nu hvor kort den er, ikke kun hvor langsom.
 const side = (dir) => (dir < 0 ? "right" : "left");
 const MOTION = {
-  push: () => "The camera moves slowly and steadily forward into the room.",
+  push: () => "The camera moves slowly and steadily a short distance forward, staying level.",
   lean: (dir) =>
-    `The camera eases forward into the room and leans slightly to the ${side(dir)} as it goes.`,
-  pull: () => "The camera moves slowly and steadily backwards, revealing more of the room.",
-  pullback: () => "The camera moves slowly and steadily backwards, revealing more of the room.",
+    `The camera eases a short distance forward and leans slightly to the ${side(dir)} as it goes.`,
+  pull: () => "The camera moves slowly and steadily a short distance backwards, staying level.",
+  pullback: () => "The camera moves slowly and steadily a short distance backwards, staying level.",
   pan: (dir) =>
-    `The camera tracks slowly and steadily sideways to the ${side(dir)} across the room, staying level.`,
-  drift: () => "The camera rises slowly and steadily, craning up over the room.",
+    `The camera tracks slowly and steadily a short distance sideways to the ${side(dir)}, staying level.`,
+  drift: () => "The camera rises slowly and steadily, craning up over the scene.",
   orbit: (dir) =>
-    `The camera arcs slowly and steadily around the room to the ${side(dir)}, staying level, ` +
+    `The camera arcs slowly and steadily around the scene to the ${side(dir)}, staying level, ` +
     "as if walking around the space.",
 };
 
@@ -87,7 +103,9 @@ export function promptFor(motion, dir) {
   return `${BASE_PROMPT} ${words}`;
 }
 
-export function buildRequest({ imageUrl, motion, aspectRatio, quality, dir, withConcepts = true }) {
+export function buildRequest({
+  imageUrl, motion, aspectRatio, quality, dir, withConcepts = true, loop = "top",
+}) {
   const q = QUALITIES[quality] || QUALITIES.test;
   const d = dir === -1 ? -1 : 1;
   const words = (MOTION[motion] || MOTION.push)(d);
@@ -105,8 +123,39 @@ export function buildRequest({ imageUrl, motion, aspectRatio, quality, dir, with
       keyframe_indexes: [0],
     },
   };
+  // LOOP ER EN BREMSE PAA HVOR LANGT KLIPPET MAA DRIVE.
+  //
+  // Et loop skal slutte der hvor det begyndte, altsaa paa maeglerens eget foto. Det binder
+  // klippet i BEGGE ender i stedet for kun den foerste, og det er en struktur frem for en bøn:
+  // en bordtennisbold kan ikke flyve ud af billedet og blive vaek, for saa passer slutningen
+  // ikke. Det samme gaelder en drone der daler ned over en have.
+  //
+  // Vi mister ikke bevaegelsen ved det. Et skud viser i praksis kun de foerste godt to sekunder
+  // af et klip paa fem - se KLIP_RO og CLIP_HALE i public/index.html - og det er den udadgaaende
+  // halvdel. Returen bliver aldrig vist; den staar der kun for at holde modellen i snor.
+  //
+  // Dokumenteret parameter, ikke et gaet paa et feltnavn. Afvises den, falder create.js
+  // tilbage til en anmodning uden - se variantkaeden dér.
+  // Hvor loop hoerer hjemme er ikke til at laese sig til: dokumentationen viser det som et
+  // argument paa oeverste niveau, men resolution og duration ligger inde i video paa det her
+  // endpoint. Begge placeringer bliver proevet, oeverste niveau foerst.
+  if (loop === "top") body.loop = true;
+  if (loop === "video") body.video.loop = true;
   if (withConcepts) body.concepts = [{ key: (CONCEPTS[motion] || CONCEPTS.push)(d) }];
   return body;
+}
+
+// Anmodningerne i den raekkefoelge de skal proeves, bedst foerst. Hvert trin opgiver praecis
+// een ting, saa en afvisning koster det mindst mulige: foerst loopet, saa konceptet, og til
+// sidst staar den anmodning koden sendte foer alt det her - den vides at virke.
+export function requestVarianter(args) {
+  return [
+    { navn: "loop(top)+koncept",   body: buildRequest({ ...args, loop: "top",   withConcepts: true  }) },
+    { navn: "loop(video)+koncept", body: buildRequest({ ...args, loop: "video", withConcepts: true  }) },
+    // Herfra og ned er det den anmodning koden sendte foer loopet kom til. Den vides at virke.
+    { navn: "koncept",             body: buildRequest({ ...args, loop: false,   withConcepts: true  }) },
+    { navn: "bar",                 body: buildRequest({ ...args, loop: false,   withConcepts: false }) },
+  ];
 }
 
 export function lumaKeyOrRespond(res) {
