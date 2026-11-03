@@ -821,6 +821,18 @@ const CLIP_HALE = 0.75;
 // Hvor langsomt et klip må spilles for at strække sin bevægelse ud. Under det halve begynder det
 // at ligne slowmotion frem for et roligt kamera, og så er panoreringen pænere.
 const KLIP_FART_MIN = 0.5;
+// Men åbningen og afslutningen er undtagelsen, og de har deres eget gulv.
+//
+// Grunden til det halve er at et langsomt klip MIDT i filmen støder op til et skud der kører i
+// fuld fart, og forskellen læses som en fejl. Åbningen og afslutningen støder ikke op til noget
+// på den ene side. De er lange, rolige og skal netop være det — et etableringsskud der tager
+// sin tid er korrekt, ikke slowmotion.
+//
+// Og de er dem der oftest falder på målingen: facader. Et blidt push på en flad husmur flytter
+// langt færre pixels end det samme push gennem en stue med dørkarme og møbler i forgrunden, så
+// målingen nedenfor registrerer knap nok at der sker noget. Resultatet var at netop det skud
+// mægleren har betalt for, og som er det første folk ser, faldt tilbage til 2D.
+const KLIP_FART_MIN_ENDE = 0.25;
 
 // clipMotion(i) -> { start, moving } in seconds, from measureClipMotion, or null when the shot has
 // no clip or it has not been measured yet. Unmeasured is treated as no clip: the shot keeps its
@@ -1012,21 +1024,25 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
     // hurtigere og skærer før. Det er også det en fartknap BØR gøre - ikke bare vise det samme
     // klip længere, men bevæge sig anderledes.
     let klipFart = tempo > 0 ? 1 / tempo : 1;
-    // SLUTSKUDDET BRUGER ALDRIG ET KLIP.
+    // SLUTSKUDDET BRUGER SIT KLIP. Her stod der før at det aldrig gjorde, og begrundelsen var
+    // forkert.
     //
-    // "pull" ovenfor er afslutningen: kameraet trækker ud til hele det uklippede foto. Det er
-    // den normale måde at forlade en bolig på, og det er samtidig det sikreste skud i filmen —
-    // det KONVERGERER mod mæglerens eget billede i stedet for at bevæge sig væk fra det, så
-    // modellen får ikke lejlighed til at finde på noget til allersidst.
+    // Den lød: "Luma laver et push eller en pan, for det er dem vi beder om, og den kan ikke
+    // vide at det her er en afslutning." Det passer ikke. isLast sætter type = "pull", og
+    // _luma.js oversætter pull til BÅDE konceptet pull_out og prosaen "The camera moves slowly
+    // and steadily backwards, revealing more of the room." Vi beder altså præcis om udzoomningen,
+    // og modellen leverer den.
     //
-    // Men useClip stod true for alle skud. Havde det sidste billede fået et AI-klip, spillede
-    // klippet i stedet, og udzoomningen forsvandt — Luma laver et push eller en pan, for det er
-    // dem vi beder om, og den kan ikke vide at det her er en afslutning.
+    // Konsekvensen af fejlen var at hver bolig betalte 1,20 dollars for et korrekt udzoomnings-
+    // klip, der derefter blev smidt væk til fordel for den samme bevægelse lavet i 2D.
     //
-    // Klippet bliver stadig genereret, saa en omrokering af billederne ikke efterlader et hul.
-    // Vil man spare det, skal HQ-koerslen springe sidste indeks over - det er 8 kr per bolig,
-    // men saa skal der ogsaa taenkes paa hvad der sker naar maegleren flytter rundt bagefter.
-    let useClip = !isLast, clipStart = 0;
+    // Afslutningen er i øvrigt det SIKRESTE skud i filmen: den konvergerer mod mæglerens eget
+    // billede i stedet for at bevæge sig væk fra det, så modellen får mindst lejlighed til at
+    // finde på noget. Der er ingen grund til at det skud er det eneste uden parallakse.
+    //
+    // 2D-buen nedenfor (zFrom 1.08 -> 1.0) bliver stående som reserve, hvis klippet mangler
+    // eller falder på bevægelsesmålingen.
+    let useClip = true, clipStart = 0;
     const m = motionAt(i);
     // isFinite guards the arithmetic below: a malformed measurement would otherwise turn the
     // shot's duration into NaN, and one NaN duration takes down the whole timeline.
@@ -1049,9 +1065,19 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
         // sekunder uden et eneste frosset billede. Først når selv den halve fart ikke slår til,
         // falder vi tilbage til 2D — og så er der reelt heller ingen bevægelse at vise.
         const kraevetFart = (m.moving * 1000) / (BEAT_MS * CLIP_MIN_BEATS);
-        if (kraevetFart >= KLIP_FART_MIN) {
+        // Åbningen og afslutningen tåler at køre langsommere end resten — se KLIP_FART_MIN_ENDE.
+        const fartGulv = isFirst || isLast ? KLIP_FART_MIN_ENDE : KLIP_FART_MIN;
+        if (kraevetFart >= fartGulv) {
           klipFart = kraevetFart;
           movingBeats = CLIP_MIN_BEATS;
+          // OG SKUDDET SKAL FØLGE MED NED.
+          //
+          // Farten er netop valgt så bevægelsen rækker CLIP_MIN_BEATS — ikke et slag længere.
+          // Bliver skuddet stående på sin oprindelige længde, står resten af det frosset, og
+          // det er præcis den fejl gulvet skulle forhindre. For de midterste skud var det
+          // usynligt, fordi de i forvejen er korte. Åbningen og afslutningen beder om ni slag,
+          // så dér ville 2,6 sekunder af skuddet stå stille.
+          nBeats = Math.min(nBeats, movingBeats);
         } else {
         // Barely moves at all. Keep the arc, show the 2D move instead.
         useClip = false;
