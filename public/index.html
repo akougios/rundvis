@@ -798,8 +798,24 @@ function paceBeats(i, count, tempo = 1) {
 // footage parks on a frozen frame.
 // Hvor lang åbningen og afslutningen er, i slag. De to skud er filmens rammer: de skal være
 // længere end midterskuddene, så de læses som begyndelse og slutning, men ikke så meget at
-// bevægelsen i dem kører i halv fart. 6,5 slag er 3,4 sekunder mod midterskuddenes 2,1-2,6.
-const ENDE_BEATS = 6.5;
+// bevægelsen i dem kører i halv fart.
+//
+// 7 og ikke 6,5: med KLIP_RO nedenfor er midterskuddene blevet længere, og rammerne skulle
+// følge med for stadig at skille sig ud. Halevagten binder dem ellers til det samme tal.
+const ENDE_BEATS = 7;
+// GRUNDFARTEN PÅ ET KLIP. Alt under 1 spiller klippet langsommere end det blev genereret.
+//
+// Luma lægger mere bevægelse i et klip end en boligvideo har brug for: et kamera der kører
+// for hurtigt gennem et rum, og i de dårlige tilfælde ting der bevæger sig af sig selv —
+// bordtennisbolde der hopper, en drone der daler ned over et luftfoto. Vi kan ikke fjerne
+// det fra klippet, men vi kan vise det langsommere, og en bold der flyver ved 0,8 fart er
+// mindre påfaldende end en der flyver ved fuld fart.
+//
+// Det gør samtidig skuddene længere, fordi den samme bevægelse rækker flere slag. Begge dele
+// peger samme vej: roligere.
+//
+// Det her er GRUNDfarten. Tempoknappen ligger stadig ovenpå — Roligt (1,3) giver 0,62.
+const KLIP_RO = 0.8;
 const CLIP_BONUS_BEATS = 2.5;
 const CLIP_MAX_BEATS = 9;
 // The floor under a shot carrying a clip: below four beats (2.07s) a shot is a flicker, and the
@@ -1050,7 +1066,7 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
     // gennem rummet og får dermed flere sekunder ud af den samme bevægelse; hurtigt kører det
     // hurtigere og skærer før. Det er også det en fartknap BØR gøre - ikke bare vise det samme
     // klip længere, men bevæge sig anderledes.
-    let klipFart = tempo > 0 ? 1 / tempo : 1;
+    let klipFart = (tempo > 0 ? 1 / tempo : 1) * KLIP_RO;
     // SLUTSKUDDET BRUGER SIT KLIP. Her stod der før at det aldrig gjorde, og begrundelsen var
     // forkert.
     //
