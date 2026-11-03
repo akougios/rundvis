@@ -796,6 +796,10 @@ function paceBeats(i, count, tempo = 1) {
 // actually moves (see measureClipMotion). Capped at 9 beats (4.66s) of a nominal 5-second clip:
 // "5s" is what we ask Luma for, not a guarantee of what comes back, and a shot outlasting its own
 // footage parks on a frozen frame.
+// Hvor lang åbningen og afslutningen er, i slag. De to skud er filmens rammer: de skal være
+// længere end midterskuddene, så de læses som begyndelse og slutning, men ikke så meget at
+// bevægelsen i dem kører i halv fart. 6,5 slag er 3,4 sekunder mod midterskuddenes 2,1-2,6.
+const ENDE_BEATS = 6.5;
 const CLIP_BONUS_BEATS = 2.5;
 const CLIP_MAX_BEATS = 9;
 // The floor under a shot carrying a clip: below four beats (2.07s) a shot is a flicker, and the
@@ -866,16 +870,28 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
     if (isFirst) {
       // Establishing shot: opens on the FULL frame - no crop at all - and eases in. The first
       // thing the viewer sees is the photograph exactly as the agent shot it.
-      // Eight beats, over four seconds. The opening shot is the one the viewer decides on, and
-      // cutting away from it quickly is how a film announces that it is in a hurry.
-      type = "push"; nBeats = Math.max(4, Math.round(9 * tempo * 2) / 2);
+      // 6,5 slag, altså 3,4 sekunder. Var ni, og det var for langt.
+      //
+      // Åbningen skal være filmens længste skud — den bærer adressen, og det er dér seeren
+      // afgør om han bliver. Men ni slag er 4,66 sekunder, og på Instagram er det tæt på hele
+      // den tid man overhovedet har. Dertil kom at den samme bevægelse spredt over dobbelt så
+      // lang tid som et midterskud kører i halv fart, hvilket er det der fik skuddet til at
+      // ligne et stillbillede med en langsom beskæring.
+      type = "push"; nBeats = Math.max(4, Math.round(ENDE_BEATS * tempo * 2) / 2);
       zFrom = 1.0; zTo = 1.07;
       fromU = { x: 0, y: 0 }; toU = { x: 0.18, y: -0.12 };
     } else if (isLast) {
       // Close by pulling back out to the full frame again, rising slightly: the standard
       // "leave the room" move, and it ends on an uncropped picture.
-      type = "pull"; nBeats = Math.max(4, Math.round(9 * tempo * 2) / 2);
-      zFrom = 1.08; zTo = 1.0;
+      // Samme længde som åbningen, og af samme grund: lang nok til at være en afslutning,
+      // kort nok til at bevægelsen sker i et tempo man kan se.
+      type = "pull"; nBeats = Math.max(4, Math.round(ENDE_BEATS * tempo * 2) / 2);
+      // 1,10 og ikke 1,08. Udzoomningen er det ene træk i filmen hvor man ikke kan se at
+      // klippet er ægte — kameraet trækker tilbage, og så bliver alting bare mindre, i stedet
+      // for at dørkarme og møbler fejer ud gennem billedkanten. 2D-delen skal derfor være så
+      // dyb som det dybeste af de normale træk (lean, 0,10) — men ikke dybere, for skuddet
+      // skal opføre sig som de andre, ikke skille sig ud.
+      zFrom = 1.10; zTo = 1.0;
       fromU = { x: -0.2 * d, y: 0.45 }; toU = { x: 0, y: -0.1 };
     } else {
       // The move, chosen rather than cycled.
@@ -1058,6 +1074,23 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
     // isFinite guards the arithmetic below: a malformed measurement would otherwise turn the
     // shot's duration into NaN, and one NaN duration takes down the whole timeline.
     if (m && isFinite(m.moving) && isFinite(m.start)) {
+      // RAMMESKUDDENE SÆTTES BEVIDST NED I FART, så de kan vare længere end midterskuddene.
+      //
+      // Uden det her gør ENDE_BEATS ingenting. haleVagt nedenfor binder nemlig alle klipskud
+      // til det samme: et klip der bevæger sig 3,2 sekunder giver 4,5 slag uanset hvad skuddet
+      // beder om, så åbningen, midten og afslutningen endte alle på 2,33 sekunder. Det er
+      // derfor filmen ikke havde nogen form — den var tre lige lange skud i træk.
+      //
+      // Løsningen er ikke at hæve halevagten, for halen er hvor modellen finder på ting. Det er
+      // at lade rammeskuddene køre langsommere: den samme bevægelse rækker så flere slag, og
+      // klippet bevæger sig stadig hele vejen igennem. Det er samme mekanisme som redningen
+      // nedenfor, bare valgt frem for påtvunget.
+      if (isFirst || isLast) {
+        const behov = ENDE_BEATS / CLIP_HALE;                       // slag bevægelsen skal dække
+        const vilFart = (m.moving * 1000) / (BEAT_MS * behov);
+        // Aldrig hurtigere end den i forvejen var — kun ned.
+        if (vilFart < klipFart) klipFart = Math.max(KLIP_FART_MIN_ENDE, vilFart);
+      }
       // Ved halv fart rækker den samme bevægelse dobbelt så mange slag.
       let movingBeats = Math.floor(((m.moving * 1000) / (BEAT_MS * klipFart)) * 2) / 2;
       if (movingBeats < CLIP_MIN_BEATS) {
