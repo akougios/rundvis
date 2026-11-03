@@ -828,11 +828,22 @@ const KLIP_FART_MIN = 0.5;
 // på den ene side. De er lange, rolige og skal netop være det — et etableringsskud der tager
 // sin tid er korrekt, ikke slowmotion.
 //
-// Og de er dem der oftest falder på målingen: facader. Et blidt push på en flad husmur flytter
-// langt færre pixels end det samme push gennem en stue med dørkarme og møbler i forgrunden, så
-// målingen nedenfor registrerer knap nok at der sker noget. Resultatet var at netop det skud
-// mægleren har betalt for, og som er det første folk ser, faldt tilbage til 2D.
-const KLIP_FART_MIN_ENDE = 0.25;
+// Og de er dem der oftest falder på målingen: facader og terrasser. Et blidt push på en flad
+// husmur flytter langt færre pixels end det samme push gennem en stue med dørkarme og møbler i
+// forgrunden, så målingen nedenfor registrerer knap nok at der sker noget. Resultatet var at
+// netop de skud mægleren har betalt for, og som er dem folk ser først og sidst, faldt til 2D.
+//
+// HVORFOR GULVET KAN VÆRE SÅ LAVT. Den oprindelige frygt var at et næsten stillestående klip
+// midt i filmen ligner en fejl. Men composeShowFrame kalder drawShot2D for alle skud, også dem
+// med klip, så Ken Burns-beskæringen ligger oven på og kører hele skuddet ud. Et svagt klip
+// står altså ALDRIG stille på skærmen — det ligner den 2D-bevægelse det ellers var faldet
+// tilbage til, med hvad der måtte være af ægte parallakse ovenpå. Værste fald er uafgjort.
+//
+// Og halerisikoen falder med farten: ved 0,15 når et skud på 4,66 sekunder kun 0,7 sekund ind
+// i klippet, altså langt fra den hale hvor modellen finder på ting.
+//
+// 0,15 og ikke lavere: Chrome klemmer playbackRate ved 0,0625, og der skal være luft.
+const KLIP_FART_MIN_ENDE = 0.15;
 
 // clipMotion(i) -> { start, moving } in seconds, from measureClipMotion, or null when the shot has
 // no clip or it has not been measured yet. Unmeasured is treated as no clip: the shot keeps its
