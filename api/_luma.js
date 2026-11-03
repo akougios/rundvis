@@ -70,7 +70,7 @@ const CLIP_SECONDS = "5s";
 // ikke maa. "A still photograph" er en staerkere instruks end "nothing moves".
 const BASE_PROMPT =
   "Real estate listing video of this exact scene. Photorealistic, filmed on a gimbal. " +
-  "The camera moves only a short distance, and it does not fly or change altitude. " +
+  "The camera does not fly and does not change altitude. " +
   "Everything in the scene stays exactly as it is in the photo: nothing moves, nothing " +
   "changes shape, nothing is added or removed. No people, no animals, no text. " +
   "This is a still photograph, and the only thing that moves is the camera.";
@@ -82,13 +82,13 @@ const BASE_PROMPT =
 // rum. Og hver bevaegelse siger nu hvor kort den er, ikke kun hvor langsom.
 const side = (dir) => (dir < 0 ? "right" : "left");
 const MOTION = {
-  push: () => "The camera moves slowly and steadily a short distance forward, staying level.",
+  push: () => "The camera moves slowly and steadily forward, staying level.",
   lean: (dir) =>
-    `The camera eases a short distance forward and leans slightly to the ${side(dir)} as it goes.`,
-  pull: () => "The camera moves slowly and steadily a short distance backwards, staying level.",
-  pullback: () => "The camera moves slowly and steadily a short distance backwards, staying level.",
+    `The camera eases forward and leans slightly to the ${side(dir)} as it goes.`,
+  pull: () => "The camera moves slowly and steadily backwards, staying level.",
+  pullback: () => "The camera moves slowly and steadily backwards, staying level.",
   pan: (dir) =>
-    `The camera tracks slowly and steadily a short distance sideways to the ${side(dir)}, staying level.`,
+    `The camera tracks slowly and steadily sideways to the ${side(dir)}, staying level.`,
   drift: () => "The camera rises slowly and steadily, craning up over the scene.",
   orbit: (dir) =>
     `The camera arcs slowly and steadily around the scene to the ${side(dir)}, staying level, ` +
@@ -104,7 +104,7 @@ export function promptFor(motion, dir) {
 }
 
 export function buildRequest({
-  imageUrl, motion, aspectRatio, quality, dir, withConcepts = true, loop = "top",
+  imageUrl, motion, aspectRatio, quality, dir, withConcepts = true, loop = false,
 }) {
   const q = QUALITIES[quality] || QUALITIES.test;
   const d = dir === -1 ? -1 : 1;
@@ -136,9 +136,14 @@ export function buildRequest({
   //
   // Dokumenteret parameter, ikke et gaet paa et feltnavn. Afvises den, falder create.js
   // tilbage til en anmodning uden - se variantkaeden dér.
-  // Hvor loop hoerer hjemme er ikke til at laese sig til: dokumentationen viser det som et
-  // argument paa oeverste niveau, men resolution og duration ligger inde i video paa det her
-  // endpoint. Begge placeringer bliver proevet, oeverste niveau foerst.
+  // LOOPET ER TAGET UD IGEN. Det blev lagt ind for at binde klippet i begge ender, saa intet
+  // kunne flyve ud af billedet og blive vaek. Det virkede ikke: boldene kom igen. Til gengaeld
+  // kostede det - aabningen blev naesten stillestaaende, fordi en model der SKAL tilbage til
+  // udgangspunktet loeser opgaven ved at lade vaere med at bevaege sig. Maalt paa en rigtig
+  // film: luftfotoet laa under 0,4 i billedforskel over halvandet sekund.
+  //
+  // Omkostning uden gevinst. Koden staar her, fordi spoergsmaalet kommer igen: svaret er
+  // proevet, og det er nej.
   if (loop === "top") body.loop = true;
   if (loop === "video") body.video.loop = true;
   if (withConcepts) body.concepts = [{ key: (CONCEPTS[motion] || CONCEPTS.push)(d) }];
@@ -150,11 +155,8 @@ export function buildRequest({
 // sidst staar den anmodning koden sendte foer alt det her - den vides at virke.
 export function requestVarianter(args) {
   return [
-    { navn: "loop(top)+koncept",   body: buildRequest({ ...args, loop: "top",   withConcepts: true  }) },
-    { navn: "loop(video)+koncept", body: buildRequest({ ...args, loop: "video", withConcepts: true  }) },
-    // Herfra og ned er det den anmodning koden sendte foer loopet kom til. Den vides at virke.
-    { navn: "koncept",             body: buildRequest({ ...args, loop: false,   withConcepts: true  }) },
-    { navn: "bar",                 body: buildRequest({ ...args, loop: false,   withConcepts: false }) },
+    { navn: "koncept", body: buildRequest({ ...args, loop: false, withConcepts: true  }) },
+    { navn: "bar",     body: buildRequest({ ...args, loop: false, withConcepts: false }) },
   ];
 }
 

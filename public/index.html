@@ -817,7 +817,12 @@ const ENDE_BEATS = 7;
 // Det her er GRUNDfarten. Tempoknappen ligger stadig ovenpå — Roligt (1,3) giver 0,62.
 const KLIP_RO = 0.8;
 const CLIP_BONUS_BEATS = 2.5;
-const CLIP_MAX_BEATS = 9;
+// 6,5 og ikke 9. Ni slag er 4,66 sekunder, og det var dér midterskuddet med bordtennisbordet
+// endte: et klip der bevaeger sig meget "fortjener" et laengere skud, og med loftet paa ni kunne
+// et interioer med masser af parallakse traekke skuddet helt derop. Men et langt skud betyder
+// at vi spiller laengere ind i klippet, og det er dér modellen finder paa ting. Loftet er nu
+// det samme som rammeskuddene, saa intet skud kan blive filmens lange undtagelse.
+const CLIP_MAX_BEATS = 6.5;
 // The floor under a shot carrying a clip: below four beats (2.07s) a shot is a flicker, and the
 // free 2D move - which moves for the whole shot, every time - is the better picture.
 //
@@ -837,7 +842,11 @@ const CLIP_MIN_BEATS = 4;
 // Hvor meget af den bevægende del af et klip der bruges. Resten er hale, og det er i halen
 // modellen finder på ting — se haleVagt i buildEditPlan. Skru op hvis filmen føles for kort,
 // ned hvis der stadig dukker mærkelige ting op sent i klippene.
-const CLIP_HALE = 0.75;
+//
+// 0,55 og ikke 0,75. Maalt paa en rigtig film: midterskuddet brugte 3,2 af klippets 5 sekunder,
+// altsaa 64 procent, og det var i den sidste del boldene fløj. Den foerste halvdel af et klip
+// er den trovaerdige - dér foelger modellen stadig fotoet - saa vi bliver i den.
+const CLIP_HALE = 0.55;
 // Hvor langsomt et klip må spilles for at strække sin bevægelse ud. Under det halve begynder det
 // at ligne slowmotion frem for et roligt kamera, og så er panoreringen pænere.
 const KLIP_FART_MIN = 0.5;
