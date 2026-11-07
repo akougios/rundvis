@@ -317,6 +317,31 @@ function buildPlate(img, outW, outH) {
 // By construction the rectangle can never leave the photo: its half-width plus the largest
 // possible offset is exactly the plate's half-width. That is the whole black-edge guarantee -
 // no projection maths, no search, nothing to get wrong.
+// Hvor meget af skuddets beskæringsbevægelse der lægges oven på et AI-klip. 1 ville give et
+// klipskud samme bevægelse som et stillbillede får, og det er for meget: klippet bevæger sig
+// allerede, og to bevægelser oven i hinanden er præcis den uro der blev klaget over.
+//
+// 0,7 er valgt som en BUND. Ved 0,55 fik åbningen kun 3,8 % zoom over 3,4 sekunder, og det er
+// lige på grænsen af hvad øjet opfatter — altså stadig "står stille". Åbningen har i forvejen
+// filmens mindste beskæring med vilje (1,00 -> 1,07, den åbner på hele det ubeskårne foto), så
+// den er den der først læses som død. Ved 0,7 får den 4,9 %.
+//
+// Skal det skrues, er det her tallet. Op hvis der stadig er skud der virker døde, ned hvis
+// filmen føles rastløs.
+const KB_PAA_KLIP = 0.7;
+
+// Samme bevægelse, skaleret. Zoomet skaleres om 1,0, så 0 giver et helt roligt udsnit.
+function daempetSpec(spec, k) {
+  const s = (v) => 1 + (v - 1) * k;
+  return {
+    ...spec,
+    zFrom: s(spec.zFrom),
+    zTo: s(spec.zTo),
+    fromU: { x: spec.fromU.x * k, y: spec.fromU.y * k },
+    toU: { x: spec.toU.x * k, y: spec.toU.y * k },
+  };
+}
+
 function shotRectAt(spec, plateW, plateH, outAspect, t) {
   const e = easeShot(t, spec.ease);
   // Bounded at BOTH ends, because e can exceed 1 while this shot fades out under the next one.
@@ -458,12 +483,28 @@ function drawShot2D(octx, W, H, shot, t) {
     if (!vw || !vh) return;
     // A clip is generated in the format that was chosen at the time. Switch the player to another
     // one afterwards and the clip is cover-cropped like any photo, so it gets the same treatment.
+    // ET KLIPSKUD FÅR OGSÅ EN BESKÆRINGSBEVÆGELSE. Her stod der før en centreret, fast
+    // udsnitstegning, og `t` blev slet ikke brugt — altså ingen bevægelse ud over klippets egen.
+    //
+    // Det betød at et skud stod HELT stille så snart Luma havde lavet et roligt klip, og
+    // eksteriører er netop dem modellen bevæger mindst: et blidt push på en flad husmur flytter
+    // næsten ingenting. Målt på en leveret film lå åbningen på 0,00 i billedforskel i over et
+    // sekund. Der var ingen bund under den.
+    //
+    // Nu er der. Beskæringen kører altid, så et skud kan ikke fryse, uanset hvad modellen
+    // leverede. KB_PAA_KLIP dæmper den, fordi klippet i forvejen bevæger sig — det her er en
+    // bund, ikke en ekstra bevægelse oveni.
+    const vSpec = daempetSpec(shot.spec, KB_PAA_KLIP);
     if (widthLoss(vw, vh, W / H) > FIT_WHEN_LOSS_OVER) {
-      drawBedded(octx, W, H, shot, v, vw, vh, 1, 0, 0, `${W}x${H}`);
+      const e = easeShot(t, shot.spec.ease);
+      const z = 1 + 0.045 * KB_PAA_KLIP * e;
+      const dx = (shot.spec.toU.x - shot.spec.fromU.x) * e * W * 0.012 * KB_PAA_KLIP;
+      const dy = (shot.spec.toU.y - shot.spec.fromU.y) * e * H * 0.012 * KB_PAA_KLIP;
+      drawBedded(octx, W, H, shot, v, vw, vh, z, dx, dy, `${W}x${H}`);
       return;
     }
-    const base = coverRect(vw, vh, W / H);
-    octx.drawImage(v, (vw - base.w) / 2, (vh - base.h) / 2, base.w, base.h, 0, 0, W, H);
+    const r = shotRectAt(vSpec, vw, vh, W / H, t);
+    octx.drawImage(v, r.x, r.y, r.w, r.h, 0, 0, W, H);
     return;
   }
 
