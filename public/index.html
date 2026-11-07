@@ -888,32 +888,25 @@ const CLIP_MIN_BEATS = 4;
 // altsaa 64 procent, og det var i den sidste del boldene fløj. Den foerste halvdel af et klip
 // er den trovaerdige - dér foelger modellen stadig fotoet - saa vi bliver i den.
 const CLIP_HALE = 0.55;
-// Hvor langsomt et klip må spilles for at strække sin bevægelse ud. Under det halve begynder det
-// at ligne slowmotion frem for et roligt kamera, og så er panoreringen pænere.
-const KLIP_FART_MIN = 0.5;
-// Men åbningen og afslutningen er undtagelsen, og de har deres eget gulv.
+// Hvor langsomt et klip må spilles for at strække sin bevægelse ud. Er det langsommere end
+// dette, kasseres klippet og skuddet vises i 2D.
 //
-// Grunden til det halve er at et langsomt klip MIDT i filmen støder op til et skud der kører i
-// fuld fart, og forskellen læses som en fejl. Åbningen og afslutningen støder ikke op til noget
-// på den ene side. De er lange, rolige og skal netop være det — et etableringsskud der tager
-// sin tid er korrekt, ikke slowmotion.
+// 0,12 og ikke 0,5. GRUNDEN TIL GULVET ER FALDET VÆK. Det lød: et næsten stillestående klip
+// midt i filmen ligner en fejl, så hellere en ren 2D-bevægelse. Det holdt kun så længe et
+// klipskud ingen beskæring havde — se KB_PAA_KLIP, hvor den fejl er rettet. Nu kører
+// beskæringen oven på ethvert klip, så et svagt klip ser ud som den 2D-bevægelse det ellers
+// ville være faldet tilbage til, med hvad der måtte være af ægte parallakse ovenpå.
 //
-// Og de er dem der oftest falder på målingen: facader og terrasser. Et blidt push på en flad
-// husmur flytter langt færre pixels end det samme push gennem en stue med dørkarme og møbler i
-// forgrunden, så målingen nedenfor registrerer knap nok at der sker noget. Resultatet var at
-// netop de skud mægleren har betalt for, og som er dem folk ser først og sidst, faldt til 2D.
+// Der er altså ingen nedside længere, og en reel opside: mægleren har betalt 1,20 dollars for
+// klippet. Målt på en leveret film blev tre af seks skud kasseret på det gamle gulv.
 //
-// HVORFOR GULVET KAN VÆRE SÅ LAVT. Den oprindelige frygt var at et næsten stillestående klip
-// midt i filmen ligner en fejl. Men composeShowFrame kalder drawShot2D for alle skud, også dem
-// med klip, så Ken Burns-beskæringen ligger oven på og kører hele skuddet ud. Et svagt klip
-// står altså ALDRIG stille på skærmen — det ligner den 2D-bevægelse det ellers var faldet
-// tilbage til, med hvad der måtte være af ægte parallakse ovenpå. Værste fald er uafgjort.
-//
-// Og halerisikoen falder med farten: ved 0,15 når et skud på 4,66 sekunder kun 0,7 sekund ind
-// i klippet, altså langt fra den hale hvor modellen finder på ting.
-//
-// 0,15 og ikke lavere: Chrome klemmer playbackRate ved 0,0625, og der skal være luft.
-const KLIP_FART_MIN_ENDE = 0.15;
+// 0,12 og ikke lavere: Chrome klemmer playbackRate ved 0,0625, og der skal være luft. Et klip
+// der bevæger sig mindre end et kvart sekund er reelt et stillbillede, og dér er 2D ærligere.
+const KLIP_FART_MIN = 0.12;
+// Åbningen og afslutningen havde et lavere gulv end resten, fordi de oftest faldt på målingen:
+// facader og terrasser flytter få pixels. Nu har alle skud samme lave gulv, så de to tal er
+// det samme. Navnet bliver stående, så kaldstedet ikke skal røres.
+const KLIP_FART_MIN_ENDE = KLIP_FART_MIN;
 
 // clipMotion(i) -> { start, moving } in seconds, from measureClipMotion, or null when the shot has
 // no clip or it has not been measured yet. Unmeasured is treated as no clip: the shot keeps its
