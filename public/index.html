@@ -494,12 +494,13 @@ function drawShot2D(octx, W, H, shot, t) {
     // Nu er der. Beskæringen kører altid, så et skud kan ikke fryse, uanset hvad modellen
     // leverede. KB_PAA_KLIP dæmper den, fordi klippet i forvejen bevæger sig — det her er en
     // bund, ikke en ekstra bevægelse oveni.
-    const vSpec = daempetSpec(shot.spec, KB_PAA_KLIP);
+    const kb = shot.spec.kbSkala != null ? shot.spec.kbSkala : KB_PAA_KLIP;
+    const vSpec = daempetSpec(shot.spec, kb);
     if (widthLoss(vw, vh, W / H) > FIT_WHEN_LOSS_OVER) {
       const e = easeShot(t, shot.spec.ease);
-      const z = 1 + 0.045 * KB_PAA_KLIP * e;
-      const dx = (shot.spec.toU.x - shot.spec.fromU.x) * e * W * 0.012 * KB_PAA_KLIP;
-      const dy = (shot.spec.toU.y - shot.spec.fromU.y) * e * H * 0.012 * KB_PAA_KLIP;
+      const z = 1 + 0.045 * kb * e;
+      const dx = (shot.spec.toU.x - shot.spec.fromU.x) * e * W * 0.012 * kb;
+      const dy = (shot.spec.toU.y - shot.spec.fromU.y) * e * H * 0.012 * kb;
       drawBedded(octx, W, H, shot, v, vw, vh, z, dx, dy, `${W}x${H}`);
       return;
     }
@@ -888,25 +889,14 @@ const CLIP_MIN_BEATS = 4;
 // altsaa 64 procent, og det var i den sidste del boldene fløj. Den foerste halvdel af et klip
 // er den trovaerdige - dér foelger modellen stadig fotoet - saa vi bliver i den.
 const CLIP_HALE = 0.55;
-// Hvor langsomt et klip må spilles for at strække sin bevægelse ud. Er det langsommere end
-// dette, kasseres klippet og skuddet vises i 2D.
+// Hvor langsomt et klip må spilles. Der er ikke længere et gulv der KASSERER et klip — det
+// eneste tilbage er Chromes nedre grænse for playbackRate, som er 0,0625, med luft til.
 //
-// 0,12 og ikke 0,5. GRUNDEN TIL GULVET ER FALDET VÆK. Det lød: et næsten stillestående klip
-// midt i filmen ligner en fejl, så hellere en ren 2D-bevægelse. Det holdt kun så længe et
-// klipskud ingen beskæring havde — se KB_PAA_KLIP, hvor den fejl er rettet. Nu kører
-// beskæringen oven på ethvert klip, så et svagt klip ser ud som den 2D-bevægelse det ellers
-// ville være faldet tilbage til, med hvad der måtte være af ægte parallakse ovenpå.
-//
-// Der er altså ingen nedside længere, og en reel opside: mægleren har betalt 1,20 dollars for
-// klippet. Målt på en leveret film blev tre af seks skud kasseret på det gamle gulv.
-//
-// 0,12 og ikke lavere: Chrome klemmer playbackRate ved 0,0625, og der skal være luft. Et klip
-// der bevæger sig mindre end et kvart sekund er reelt et stillbillede, og dér er 2D ærligere.
-const KLIP_FART_MIN = 0.12;
-// Åbningen og afslutningen havde et lavere gulv end resten, fordi de oftest faldt på målingen:
-// facader og terrasser flytter få pixels. Nu har alle skud samme lave gulv, så de to tal er
-// det samme. Navnet bliver stående, så kaldstedet ikke skal røres.
-const KLIP_FART_MIN_ENDE = KLIP_FART_MIN;
+// Gulvet der kasserede var på 0,5 og krævede 1,03 sekunds målt bevægelse. Målt på Haldkjærvej 9
+// smed det tre af seks betalte klip væk. Det kunne forsvares dengang et klipskud ingen
+// beskæring havde og derfor kunne stå helt frosset. Det kan det ikke længere — se KB_PAA_KLIP
+// og kbSkala, som sørger for at et svagt klip bliver et roligt skud frem for et dødt.
+const KLIP_FART_GULV = 0.1;
 
 // clipMotion(i) -> { start, moving } in seconds, from measureClipMotion, or null when the shot has
 // no clip or it has not been measured yet. Unmeasured is treated as no clip: the shot keeps its
@@ -1148,7 +1138,7 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
         const behov = ENDE_BEATS / CLIP_HALE;                       // slag bevægelsen skal dække
         const vilFart = (m.moving * 1000) / (BEAT_MS * behov);
         // Aldrig hurtigere end den i forvejen var — kun ned.
-        if (vilFart < klipFart) klipFart = Math.max(KLIP_FART_MIN_ENDE, vilFart);
+        if (vilFart < klipFart) klipFart = Math.max(KLIP_FART_GULV, vilFart);
       }
       // Ved halv fart rækker den samme bevægelse dobbelt så mange slag.
       let movingBeats = Math.floor(((m.moving * 1000) / (BEAT_MS * klipFart)) * 2) / 2;
@@ -1167,11 +1157,20 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
         // vejen. Et klip med 1,1 sekunds bevægelse spilles ved halv fart og fylder de 2,07
         // sekunder uden et eneste frosset billede. Først når selv den halve fart ikke slår til,
         // falder vi tilbage til 2D — og så er der reelt heller ingen bevægelse at vise.
+        // ET KLIP KASSERES ALDRIG. Her stod et gulv, og under det blev skuddet vist i 2D.
+        //
+        // Det er droppet. Produktet er AI-redigering, og et 2D-skud midt i en opgraderet film
+        // er ikke et roligere valg — det er et skud uden det mægleren har betalt for. Målt på
+        // Haldkjærvej 9 blev tre af seks skud kasseret på det gamle gulv.
+        //
+        // Det kan lade sig gøre, fordi beskæringen nu kører oven på ethvert klip (KB_PAA_KLIP),
+        // og fordi kbSkala nedenfor skruer den OP netop når klippet bidrager lidt. Et svagt
+        // klip bliver altså et roligt, sikkert skud med en smule ægte parallakse — ikke et
+        // frosset billede. Det var frysningen gulvet beskyttede imod, og den er væk.
         const kraevetFart = (m.moving * 1000) / (BEAT_MS * CLIP_MIN_BEATS);
-        // Åbningen og afslutningen tåler at køre langsommere end resten — se KLIP_FART_MIN_ENDE.
-        const fartGulv = isFirst || isLast ? KLIP_FART_MIN_ENDE : KLIP_FART_MIN;
-        if (kraevetFart >= fartGulv) {
-          klipFart = kraevetFart;
+        {
+          // Kun Chromes nedre graense for playbackRate er tilbage, med luft til.
+          klipFart = Math.max(KLIP_FART_GULV, kraevetFart);
           movingBeats = CLIP_MIN_BEATS;
           // HER STOD ET LOFT PÅ nBeats. Det blev målt væk igen, og grunden er værd at huske.
           //
@@ -1189,9 +1188,6 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
           // kun den anden gren, og et loft her ville koste to en halv sekund af åbningen for
           // en risiko der ikke er set endnu. Så den bliver stående, indtil der er et billede
           // der viser problemet.
-        } else {
-        // Barely moves at all. Keep the arc, show the 2D move instead.
-        useClip = false;
         }
       } else {
         clipStart = m.start;
@@ -1220,7 +1216,17 @@ function buildEditPlan(count, clipMotion, tempo = 1, tilKlip = false, ligner = n
     // built for 1.1, which is the one thing this whole approach exists to avoid.
     zFrom = Math.min(zFrom, KB_MAX_ZOOM); zTo = Math.min(zTo, KB_MAX_ZOOM);
 
-    plan.push({ type, dirSign: d, zFrom, zTo, fromU, toU, durationMs: beats(nBeats), useClip, clipStart, klipFart });
+    // HVOR MEGET BESKÆRINGEN SKAL BÆRE. Et klip i fuld fart bevæger sig rigeligt selv, og en
+    // kraftig beskæring oveni er den uro der blev klaget over. Et klip der kravler ved 0,12
+    // bidrager næsten ingenting, og dér skal beskæringen bære skuddet næsten alene.
+    //
+    // Farten er den bedste indikator vi har uden at måle amplitude: den er netop sat efter hvor
+    // lidt bevægelse klippet indeholder. Fuld fart giver halv beskæring, kravlefart giver næsten
+    // hel. Resultatet er at ingen skud er døde, og ingen er rastløse.
+    const kbSkala = useClip
+      ? Math.min(1, Math.max(0.5, 1 - 0.5 * (klipFart / KLIP_RO)))
+      : 1;
+    plan.push({ type, dirSign: d, zFrom, zTo, fromU, toU, durationMs: beats(nBeats), useClip, clipStart, klipFart, kbSkala });
   }
 
   // Transitions. Mostly dissolves, with a hard cut every third shot for lift. The hard cut is
