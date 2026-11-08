@@ -2206,9 +2206,6 @@ function Rundvis() {
     Object.assign(c, patch);
   };
 
-  // Music. The agent supplies the track: bundling one would mean shipping music we have no
-  // licence to redistribute, and a listing video is published publicly. An uploaded file is
-  // decoded once and reused for both the preview and the exported file.
   // Address and agent for the opening and closing cards. Empty means no cards at all: the film
   // is complete without them, and a half-filled title is worse than none.
   const [titles, setTitles] = useState({ headline: "", agent: "" });
@@ -3153,7 +3150,6 @@ function Rundvis() {
   // The scrubber is moved by writing to the element directly. Driving it from state would
   // re-render the whole page - thumbnails and all - on every frame, to move one bar.
   const showTotalMs = flythroughParams.reduce((a, sp) => a + sp.durationMs, 0);
-  showTotalRef.current = showTotalMs;
   useEffect(() => {
     if (flythroughStatus !== "done" || !showTotalMs) return;
     let raf = 0, tæl = 0;
