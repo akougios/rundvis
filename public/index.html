@@ -799,9 +799,9 @@ const KLIP_TRAEK = ["push", "pan"];
 // filmen bliver kortere, men snittene bliver liggende på gitteret. Derfor rundes der stadig
 // til halve slag bagefter.
 //
-// Musikken følger IKKE med. Den afspilles i sit eget tempo og klippes bare tidligere — at
-// strække en lydfil ændrer tonehøjden, og en mægler der lægger sit eget nummer på vil ikke
-// have det til at lyde forkert fordi filmen skulle være kortere.
+// Slagnettet på 116 er nu en ren klippebeslutning. Der er ingen musik i produktet, så tallet
+// følger ikke noget — det er valgt fordi det giver skudlængder der føles rigtige. Kommer der
+// et musikbibliotek, skal nettet følge det valgte nummers tempo i stedet for at stå fast.
 const TEMPI = [
   { id: "roligt", navn: "Roligt", faktor: 1.3 },
   { id: "normalt", navn: "Normalt", faktor: 1.0 },
@@ -1408,14 +1408,6 @@ function drawTitles(octx, W, H, titles, idx, lastIdx, local, durationMs) {
   octx.restore();
 }
 
-// Hvor i musikfilen vi skal være, når filmen står på filmMs. To modulo'er, og de er ikke det
-// samme: den første fordi filmen looper, den anden fordi musikken kan være kortere end filmen.
-// Ligger som sin egen funktion frem for inde i komponenten, så den kan afprøves alene.
-function musikTidFor(filmMs, totalMs, lydLaengde) {
-  if (!(totalMs > 0) || !(lydLaengde > 0) || !Number.isFinite(filmMs)) return 0;
-  return ((((filmMs % totalMs) + totalMs) % totalMs) / 1000) % lydLaengde;
-}
-
 // MÆGLERENS LOGO, nede i højre hjørne.
 //
 // Tre valg der er værd at kende. Størrelsen regnes ud fra billedets KORTESTE side, ikke
@@ -2009,7 +2001,7 @@ function filnavnFra(adresse, format, ext) {
   return `${slug || "rundvis-gennemgang"}-${String(format).replace(":", "x")}.${ext}`;
 }
 
-async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, onProgress, onWarn, musicBytes, titles, logo, aiMaerke }) {
+async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, onProgress, onWarn, titles, logo, aiMaerke }) {
   if (!window.MediaRecorder) throw new Error("Din browser understøtter ikke videooptagelse. Prøv Chrome eller Safari 17+.");
   const mime = pickRecorderMime();
   if (!mime) throw new Error("Din browser kan ikke optage video fra et canvas.");
@@ -2037,7 +2029,6 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
   const cleanup = () => { shots.forEach(releaseShot); shots.length = 0; };
   // Declared out here, not inside the try: the finally below shuts them down, and a `let` inside
   // the try block would not be in scope there.
-  let audioCtx = null, musicNodes = null;
 
   try {
     // Sources are built up front, at this format's size, so no frame stalls mid-recording.
@@ -2076,41 +2067,6 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
     const totalMs = shots.reduce((a, s) => a + s.spec.durationMs, 0);
     const totalFrames = Math.max(1, Math.round((totalMs / 1000) * fps));
 
-    // Music is mixed in as a real audio track on the recorded stream, so the downloaded file
-    // carries it rather than the agent having to add it in another program. It is faded out over
-    // the last second, and cut to the video's length.
-    const totalSeconds = totalMs / 1000;
-    const buildMusicTrack = async () => {
-      if (!musicBytes) return null;
-      try {
-        const Ctx = window.AudioContext || window.webkitAudioContext;
-        if (!Ctx) return null;
-        audioCtx = new Ctx();
-        const buf = await audioCtx.decodeAudioData(musicBytes.slice(0));
-        const dest = audioCtx.createMediaStreamDestination();
-        const src = audioCtx.createBufferSource();
-        src.buffer = buf;
-        // A track shorter than the video loops rather than leaving silence at the end.
-        src.loop = true;
-        const gain = audioCtx.createGain();
-        const FADE = Math.min(1.2, totalSeconds / 4);
-        gain.gain.setValueAtTime(0, audioCtx.currentTime);
-        gain.gain.linearRampToValueAtTime(0.85, audioCtx.currentTime + Math.min(1, FADE));
-        gain.gain.setValueAtTime(0.85, audioCtx.currentTime + Math.max(0, totalSeconds - FADE));
-        gain.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + totalSeconds);
-        src.connect(gain); gain.connect(dest);
-        musicNodes = { src, dest };
-        return dest.stream.getAudioTracks()[0];
-      } catch (e) {
-        // Music is a nice-to-have; a video without it beats no video at all. Men det skal SIGES.
-        // Før stod der bare return null her, og så fik mægleren en tavs fil uden at vide hvorfor
-        // - filen ser korrekt ud, den har bare ikke noget lydspor overhovedet.
-        if (onWarn) onWarn("Musikken kunne ikke lægges på filen. Videoen er hentet uden lyd.");
-        return null;
-      }
-    };
-    const musicTrack = await buildMusicTrack();
-    if (!musicBytes && onWarn) onWarn("Der er ikke valgt nogen musik, så filen hentes uden lyd.");
 
     const stream = out.captureStream(0);
     const track = stream.getVideoTracks()[0];
@@ -2118,9 +2074,7 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
     // has to sample the canvas on its own clock instead of being pushed one frame at a time.
     const manualFrames = typeof track.requestFrame === "function";
     const baseStream = manualFrames ? stream : out.captureStream(fps);
-    const liveStream = musicTrack
-      ? new MediaStream([...baseStream.getVideoTracks(), musicTrack])
-      : baseStream;
+    const liveStream = baseStream;
     const chunks = [];
     // Scaled to the pixel count: 1080p needs roughly twice the bitrate 720p did, and a slow pan
     // across a detailed room is exactly the content that shows compression blocking.
@@ -2129,7 +2083,6 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
     recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
     const finished = new Promise((res) => { recorder.onstop = res; });
     recorder.start();
-    if (musicNodes) { try { musicNodes.src.start(); } catch (e) {} }
 
     // If the tab is hidden part-way through, everything recorded from that point is lost. Stop
     // and say so, rather than finishing and handing over a truncated file.
@@ -2186,8 +2139,6 @@ async function exportFlythroughVideo({ stills, specs, clips, format, fps = 30, o
     return blob;
   } finally {
     cleanup();
-    if (musicNodes) { try { musicNodes.src.stop(); } catch (e) {} }
-    if (audioCtx) { try { audioCtx.close(); } catch (e) {} }
   }
 }
 
@@ -2253,45 +2204,6 @@ function Rundvis() {
     c.baseMs = c.playing ? c.baseMs + (now - c.since) : c.baseMs;
     c.since = now;
     Object.assign(c, patch);
-    synkMusik();
-  };
-
-  // MUSIKKEN FØLGER FILMEN.
-  //
-  // Lydelementet har sit eget ur, og filmen har sit. Før kørte de ved siden af hinanden: man
-  // kunne pause billedet og høre musikken spille videre, og spole uden at lyden flyttede sig.
-  // Nu sættes lyden efter filmens ur hver gang uret ændrer sig — afspil, pause, spoling — og
-  // efterses undervejs, fordi to ure driver fra hinanden af sig selv uanset hvor pænt de
-  // startede.
-  //
-  // Alt læses fra refs frem for fra state: funktionen kaldes fra setClock og fra animationens
-  // løkke, altså steder hvor en værdi fra sidste render ville være forkert.
-  const showTotalRef = useRef(0);
-  const lydAktivRef = useRef(false);
-  const synkMusik = () => {
-    const a = previewAudioRef.current;
-    if (!a) return;
-    if (!lydAktivRef.current) { if (!a.paused) a.pause(); return; }
-    // Varigheden er NaN indtil browseren har læst filens hoved.
-    if (!Number.isFinite(a.duration) || a.duration <= 0) return;
-    const total = showTotalRef.current;
-    if (!total) return;
-    const c = clockRef.current;
-    const filmMs = c.playing ? c.baseMs + (performance.now() - c.since) : c.baseMs;
-    // Filmen looper, og musikken skal loope med den: starter billedet forfra, gør takten også.
-    // Det er samme forhold som i den hentede fil, hvor lyden starter sammen med optagelsen.
-    const vil = musikTidFor(filmMs, total, a.duration);
-    // 350 ms, ikke 120. Hver rettelse af currentTime giver et lille spring i lyden, så tærsklen
-    // skal kun fange det der betyder noget: filmens loop, og spring når der pauses eller spoles.
-    //
-    // Og lad det være sagt ærligt: det her er IKKE påvist som årsagen til hakkende musik. Jeg
-    // troede det var den — drift indhentet igen og igen — og regnede så efter: et lydkort
-    // driver nogle få millisekunder i sekundet, så 120 ms nås først efter omkring fyrre
-    // sekunder, og filmen varer tyve. Tærsklen kan altså ikke have udløst noget i en normal
-    // gennemspilning. 350 er stadig det rigtigere tal, men den rettede ikke en kendt fejl.
-    if (Math.abs(a.currentTime - vil) > 0.35) { try { a.currentTime = vil; } catch (e) {} }
-    if (c.playing && a.paused) a.play().catch(() => {});
-    if (!c.playing && !a.paused) a.pause();
   };
 
   // Music. The agent supplies the track: bundling one would mean shipping music we have no
@@ -2300,7 +2212,6 @@ function Rundvis() {
   // Address and agent for the opening and closing cards. Empty means no cards at all: the film
   // is complete without them, and a half-filled title is worse than none.
   const [titles, setTitles] = useState({ headline: "", agent: "" });
-  const [musicName, setMusicName] = useState("");
   const [tempo, setTempo] = useState("normalt");
   // Måles ved opstart og når vinduet ændrer sig — en telefon der vendes er et nyt vindue.
   const [sceneH, setSceneH] = useState(() => sceneHoejde());
@@ -2325,11 +2236,6 @@ function Rundvis() {
   // AI-klip i sig - gratis-udgaven er ren panorering paa hans egne fotos og skal ikke maerkes.
   const [aiMaerke, setAiMaerke] = useState(false);
   const [logoFejl, setLogoFejl] = useState("");
-  const [musicError, setMusicError] = useState("");
-  const [musicOnPreview, setMusicOnPreview] = useState(true);
-  const musicBufferRef = useRef(null);   // decoded AudioBuffer
-  const musicRawRef = useRef(null);      // the original bytes, re-decoded for each export
-  const previewAudioRef = useRef(null);  // <audio> used only for the on-page preview
 
   // High-quality pass: each photo is sent to an image-to-video model, which returns a clip with
   // real camera movement through the room. Kept strictly separate from the free preview, because
@@ -2764,7 +2670,7 @@ function Rundvis() {
     return () => window.removeEventListener("beforeunload", advar);
   }, [hqStatus]);
 
-  // Intet spiller mens der arbejdes. Filmen står stille bag sløringen, og musikken med den.
+  // Intet spiller mens der arbejdes. Filmen står stille bag sløringen.
   useEffect(() => {
     if (hqStatus !== "working") return;
     setClock({ playing: false });
@@ -3154,35 +3060,6 @@ function Rundvis() {
 
   // Decodes an uploaded track once. Keeping the raw bytes too, because an AudioBuffer cannot be
   // handed to a second AudioContext and the export makes its own.
-  const handleMusicFile = async (file) => {
-    if (!file) return;
-    setMusicError("");
-    try {
-      const bytes = await file.arrayBuffer();
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) throw new Error("Din browser understøtter ikke lydafspilning.");
-      const ctx = new Ctx();
-      // decodeAudioData consumes the buffer it is given, so it gets a copy.
-      const buf = await ctx.decodeAudioData(bytes.slice(0));
-      ctx.close();
-      musicRawRef.current = bytes;
-      musicBufferRef.current = buf;
-      setMusicName(`${file.name} · ${Math.round(buf.duration)} sek.`);
-      if (previewAudioRef.current) {
-        URL.revokeObjectURL(previewAudioRef.current.src);
-        previewAudioRef.current.src = URL.createObjectURL(file);
-      } else {
-        const a = new Audio(URL.createObjectURL(file));
-        a.loop = true;
-        previewAudioRef.current = a;
-      }
-    } catch (err) {
-      setMusicError("Kunne ikke læse lydfilen. Prøv en MP3, M4A eller WAV.");
-      musicBufferRef.current = null;
-      musicRawRef.current = null;
-      setMusicName("");
-    }
-  };
 
   const handleLogoFile = (file) => {
     if (!file) return;
@@ -3217,18 +3094,6 @@ function Rundvis() {
   };
   const fjernLogo = () => { logoRef.current = null; setLogoNavn(""); setLogoUrl(""); setLogoFejl(""); };
 
-  // Hvornår der overhovedet skal lyde noget. Selve synkroniseringen ligger i synkMusik; her
-  // afgøres kun om musikken er i spil, så den aldrig kører bag et andet trin.
-  useEffect(() => {
-    const a = previewAudioRef.current;
-    lydAktivRef.current = step === 2 && musicOnPreview && flythroughStatus === "done";
-    synkMusik();
-    // Varigheden kender vi måske først når filen er læst; så synkroniseres der igen.
-    if (a) a.addEventListener("loadedmetadata", synkMusik);
-    return () => {
-      if (a) { a.removeEventListener("loadedmetadata", synkMusik); a.pause(); }
-    };
-  }, [step, musicOnPreview, flythroughStatus, musicName]);
 
   // ---- Model bake-off ----
   // Sends ONE photo to every model at once and shows the results side by side. Run in parallel
@@ -3294,9 +3159,7 @@ function Rundvis() {
     let raf = 0, tæl = 0;
     const step = () => {
       raf = requestAnimationFrame(step);
-      // Efterse lyden et par gange i sekundet. Uret bag et lydelement og performance.now()
-      // driver fra hinanden, og filmens loop skal trække musikken med tilbage til start.
-      if ((tæl++ % 20) === 0) synkMusik();
+      // Holder tidslinjen under videoen i trit med filmen.
       const el = scrubRef.current;
       if (!el) return;
       const t = ((filmNow() % showTotalMs) + showTotalMs) % showTotalMs;
@@ -3715,7 +3578,6 @@ function Rundvis() {
         stills: flythroughStills,
         specs: flythroughParams,
         clips: hqClips,
-        musicBytes: musicRawRef.current,
         onWarn: setExportNote,
         titles,
         logo: logoRef.current,
@@ -3986,7 +3848,7 @@ function Rundvis() {
                   the controls - it is a thing you flick between while looking at the video, so it
                   belongs where your eyes already are. Hidden entirely until there is a second
                   version to switch to, so the page an agent meets first still has one button. */}
-              {flythroughStatus === "done" && (sourceTabs.length > 1 || musicName) && (
+              {flythroughStatus === "done" && sourceTabs.length > 1 && (
                 <div className="flex items-center gap-1 mb-2">
                   {sourceTabs.length > 1 && sourceTabs.map(([k, label]) => {
                     const on = showSource === k;
@@ -4007,28 +3869,6 @@ function Rundvis() {
                     );
                   })}
 
-                  {/* Lyden hører til samme sted som formatknapperne, af samme grund: man slår
-                      den fra og til mens man ser på videoen, ikke mens man scroller i
-                      musikafsnittet nede under den. Den stod før nede ved "Vælg lydfil", et
-                      halvt skærmbillede væk fra det den handler om.
-                      ml-auto skubber den ud i højre side, så rækken har formaterne til venstre
-                      og lyden til højre i stedet for fire knapper i klump. */}
-                  {musicName && (
-                    <button
-                      onClick={() => setMusicOnPreview((v) => !v)}
-                      title={musicOnPreview ? "Slå lyden fra" : "Slå lyden til"}
-                      className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] tracking-wide"
-                      style={{
-                        border: `1px solid ${musicOnPreview ? ACCENT : LINE}`,
-                        color: musicOnPreview ? ACCENT : MUTED,
-                        backgroundColor: "transparent",
-                        cursor: "pointer",
-                      }}
-                    >
-                      <Icon name={musicOnPreview ? "volume" : "music"} size={13} />
-                      {musicOnPreview ? "Lyd til" : "Lyd fra"}
-                    </button>
-                  )}
                 </div>
               )}
 
@@ -4359,7 +4199,7 @@ function Rundvis() {
               )}
 
               {/* ÉT FELT TIL DET HELE, ikke tre afsnit.
-                  Tekst, logo og musik stod før som tre sektioner med hver sin overskrift, sin
+                  Tekst og logo stod før som sektioner med hver sin overskrift, sin
                   brødtekst og sin skillelinje — tre store afsnit til to tekstfelter og to
                   upload-knapper. Det var hovedparten af teksten på siden.
                   Forklaringerne er skåret væk hvor de sagde noget man kan se: at tomme felter
@@ -4406,22 +4246,6 @@ function Rundvis() {
                       <span className="text-[11px]" style={{ color: MUTED }}>PNG med gennemsigtig baggrund</span>
                     )}
 
-                    <label
-                      className="flex items-center gap-2 px-4 py-2 rounded-full text-sm cursor-pointer"
-                      style={{ border: `1px solid ${LINE}`, color: TEXT }}
-                    >
-                      <Icon name="music" size={14} />
-                      {musicName ? "Skift musik" : "Musik"}
-                      <input
-                        type="file"
-                        accept="audio/*"
-                        className="hidden"
-                        onChange={(e) => handleMusicFile(e.target.files && e.target.files[0])}
-                      />
-                    </label>
-                    {musicName && (
-                      <span className="text-[11px]" style={{ color: MUTED }}>{musicName.split(" · ")[0]}</span>
-                    )}
 
                     {/* Kun naar filmen faktisk har AI-klip i sig. Gratis-udgaven er ren
                         panorering paa maeglerens egne fotos - der er ingen AI i den, og at
@@ -4454,17 +4278,7 @@ function Rundvis() {
                     </p>
                   )}
 
-                  {/* Det her er ikke pedanteri: Instagram og Facebook fjerner eller muter lyden
-                      paa opslag med kommerciel musik, og saa ligner det at Rundvis har leveret en
-                      stum video. Det skal staa hvor man vaelger nummeret, ikke i en hjaelpetekst
-                      ingen laeser. */}
-                  {musicName && (
-                    <p className="text-[11px] mt-2" style={{ color: MUTED }}>
-                      Brug musik du har rettighederne til — Instagram og Facebook fjerner lyden på opslag med kendte numre.
-                    </p>
-                  )}
                   {logoFejl && <p className="text-xs mt-2" style={{ color: AMBER }}>{logoFejl}</p>}
-                  {musicError && <p className="text-xs mt-2" style={{ color: AMBER }}>{musicError}</p>}
                 </div>
               )}
 
