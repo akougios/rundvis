@@ -2313,6 +2313,42 @@ function Rundvis() {
     return () => clearTimeout(t);
   }, [hentProfil]);
 
+  // LANDINGEN FRA ET BEKRÆFTELSESLINK.
+  //
+  // Klikker mægleren linket i mailen, sender Supabase ham tilbage hertil — enten med en session
+  // i orden, eller med en fejl. Fejlen står i adresselinjen, nogle gange i forespørgslen og
+  // nogle gange efter havelågen, afhængigt af hvilken vej den kom.
+  //
+  // Før læste ingenting den. Gik det galt, landede man bare på forsiden uden at vide hvorfor,
+  // og uden at vide om kontoen nu var oprettet eller ej. Det er den værste besked af alle:
+  // ingen.
+  //
+  // Teksterne er oversat for de to tilfælde der faktisk sker. Resten vises som de kommer —
+  // en engelsk fejl er bedre end en forkert dansk.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const hp = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+    const fejl = sp.get("error_description") || sp.get("error") || hp.get("error_description") || hp.get("error");
+    const kode = sp.get("error_code") || hp.get("error_code");
+    if (!fejl) return;
+
+    const t = String(fejl).toLowerCase();
+    let dansk;
+    if (kode === "otp_expired" || t.includes("expired")) {
+      dansk = "Linket i mailen er udløbet. Opret kontoen igen, så sender vi et nyt.";
+    } else if (t.includes("already") || t.includes("used")) {
+      dansk = "Linket er allerede brugt. Prøv at logge ind med din mail og adgangskode.";
+    } else {
+      dansk = `Bekræftelsen gik ikke igennem: ${String(fejl).replace(/\+/g, " ")}`;
+    }
+    setPort("login");
+    setPortFejl(dansk);
+    // Fejlen må ikke blive hængende i adresselinjen: genindlæser man siden, dukker den op igen
+    // som om den lige var sket.
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
+
   const tegnAbonnement = (plan) => medPortFejl(async () => {
     const r = await kaldMedAdgang("/api/billing/checkout", {
       method: "POST", headers: { "Content-Type": "application/json" },
