@@ -138,6 +138,11 @@ export default async function handler(req, res) {
       // Svaret er altid serverens. Det her sparer bare maegleren for at uploade tolv billeder
       // og vente, foer han faar at vide at han ikke maatte.
       maaOpgradere: ret.maa,
+      // Testerens tal. Kun sat naar kontoen faktisk er paa gratis-vejen - en ejer og en
+      // betalende kunde har ingen gratis boliger at vise, og saa skal feltet ikke staa der
+      // og foregive at der er en graense.
+      gratisBoliger: ret.gratis != null ? ret.gratis : null,
+      brugteBoliger: ret.brugt != null ? ret.brugt : null,
     },
   });
 }

@@ -4538,6 +4538,34 @@ function Rundvis() {
 
               {/* NUVÆRENDE PLAN OG FORBRUG. Tallet står før planerne, fordi det er dét en
                   kunde der allerede betaler kom for at se. */}
+              {/* TESTERENS TAL. Kvotefeltet nedenfor vises kun for betalende abonnenter, saa en
+                  tester kunne ikke se hvor han stod - han opdagede foerst graensen da han blev
+                  spaerret, og kolonnen i databasen siger det tal han FIK, ikke det han har
+                  tilbage. To forskellige ting, og det er let at laese forkert.
+
+                  Her staar begge dele, og "tilbage" staar foerst, fordi det er det man vil vide. */}
+              {profil && profil.konto && profil.konto.gratisBoliger != null && (
+                <div className="mb-8">
+                  <p className="text-[11px] mb-2" style={{ color: MUTED }}>Gratis prøve</p>
+                  <p className="font-display mb-2" style={{ fontSize: 26, color: TEXT }}>
+                    {Math.max(0, profil.konto.gratisBoliger - profil.konto.brugteBoliger)} af{" "}
+                    {profil.konto.gratisBoliger} boliger tilbage
+                  </p>
+                  <div className="w-full overflow-hidden mb-3" style={{ height: 4, backgroundColor: LINE, borderRadius: 2 }}>
+                    <div style={{
+                      width: `${Math.min(100, Math.round(100 * profil.konto.brugteBoliger / Math.max(1, profil.konto.gratisBoliger)))}%`,
+                      height: "100%",
+                      backgroundColor: profil.konto.brugteBoliger >= profil.konto.gratisBoliger ? AMBER : ACCENT,
+                    }} />
+                  </div>
+                  <p className="text-[11px]" style={{ color: MUTED }}>
+                    {profil.konto.brugteBoliger >= profil.konto.gratisBoliger
+                      ? `Prøven er brugt. Skriv til ${KONTAKT_MAIL} for at fortsætte.`
+                      : "En bolig tæller én gang, uanset hvor mange gange du opgraderer den."}
+                  </p>
+                </div>
+              )}
+
               {profil && profil.konto && profil.konto.status === "aktiv" && (
                 <div className="mb-8">
                   <p className="text-[11px] mb-2" style={{ color: MUTED }}>Denne periode</p>
