@@ -1690,11 +1690,48 @@ async function loadClipVideo(clip) {
   v.playsInline = true;
   v.preload = "auto";
   v.loop = false;
+  // canplaythrough, ikke loadeddata. loadeddata betyder kun at FØRSTE frame er klar — resten af
+  // klippet er stadig uafkodet, og så afkoder browseren hver frame mens filmen spiller. Det var
+  // hakket i første gennemspilning: anden gang ligger de afkodede frames klar.
+  //
+  // canplaythrough kan udeblive i nogle browsere, så loadeddata plus en frist er reserven.
   await new Promise((resolve, reject) => {
-    v.onloadeddata = resolve;
+    let klar = false;
+    const ok = () => { if (!klar) { klar = true; resolve(); } };
+    v.oncanplaythrough = ok;
+    v.onloadeddata = () => setTimeout(ok, 1200);
     v.onerror = () => reject(new Error("Klippet kunne ikke afkodes."));
   });
   return v;
+}
+
+// VARM DEKODEREN OP, OG PARKÉR KLIPPET DER HVOR SKUDDET BEGYNDER.
+//
+// measureClipMotion SØGER gennem klippet i spring på en sjettedel sekund. En søgning afkoder kun
+// den enkelte frame den lander på, ikke dem imellem, og den efterlader videoen til sidst i
+// klippet. Når filmen så spiller første gang, skal den springe tilbage og afkode hvert eneste
+// billede forfra — og det er dér det hakker. Anden gang er alt afkodet, og så kører den rent.
+//
+// Her spilles hvert klip kort igennem og sættes tilbage til sit indgangspunkt, så dekoderen er
+// på plads inden første frame tegnes. Det koster under et sekund i alt, oven på en generering
+// der har taget minutter.
+async function varmOpKlip(v, start) {
+  const soeg = (t) => new Promise((done) => {
+    let f = false;
+    const fin = () => { if (f) return; f = true; v.removeEventListener("seeked", fin); done(); };
+    v.addEventListener("seeked", fin);
+    setTimeout(fin, 400);
+    try { v.currentTime = Math.max(0, Math.min(t, (v.duration || 1) - 0.05)); } catch (e) { fin(); }
+  });
+  try {
+    await soeg(start || 0);
+    // Lydløs afspilning er tilladt uden brugerhandling, og et kort stykke er nok til at
+    // afkodningskæden er i gang frem for at starte koldt midt i filmen.
+    try { await v.play(); } catch (e) { /* blokeret autoplay er ikke en fejl her */ }
+    await new Promise((r) => setTimeout(r, 120));
+    try { v.pause(); } catch (e) {}
+    await soeg(start || 0);
+  } catch (e) { /* opvarmning er en forbedring, aldrig et krav */ }
 }
 
 // HOW LONG DOES THIS CLIP ACTUALLY MOVE?
@@ -1869,6 +1906,10 @@ function FlythroughStage({ stills, specs, clips, onError, titles, logo, aiMaerke
           if (!clips[i] || (specs[i] && specs[i].useClip === false)) { videos.push(null); continue; }
           try {
             const v = await loadClipVideo(clips[i]);
+            if (disposed) { releaseShot({ video: v }); return; }
+            // Parkér klippet hvor skuddet begynder, med dekoderen i gang. Uden det hakker
+            // første gennemspilning — se varmOpKlip.
+            await varmOpKlip(v, specs[i] ? specs[i].clipStart : 0);
             if (disposed) { releaseShot({ video: v }); return; }
             videos.push(v);
           } catch (e) { videos.push(null); }
@@ -2240,9 +2281,15 @@ function Rundvis() {
     // Filmen looper, og musikken skal loope med den: starter billedet forfra, gør takten også.
     // Det er samme forhold som i den hentede fil, hvor lyden starter sammen med optagelsen.
     const vil = musikTidFor(filmMs, total, a.duration);
-    // En tærskel, ikke en konstant rettelse: at sætte currentTime hver frame giver et hak man
-    // kan høre. 120 ms er under det man opfatter som ude af trit.
-    if (Math.abs(a.currentTime - vil) > 0.12) { try { a.currentTime = vil; } catch (e) {} }
+    // 350 ms, ikke 120. Hver rettelse af currentTime giver et lille spring i lyden, så tærsklen
+    // skal kun fange det der betyder noget: filmens loop, og spring når der pauses eller spoles.
+    //
+    // Og lad det være sagt ærligt: det her er IKKE påvist som årsagen til hakkende musik. Jeg
+    // troede det var den — drift indhentet igen og igen — og regnede så efter: et lydkort
+    // driver nogle få millisekunder i sekundet, så 120 ms nås først efter omkring fyrre
+    // sekunder, og filmen varer tyve. Tærsklen kan altså ikke have udløst noget i en normal
+    // gennemspilning. 350 er stadig det rigtigere tal, men den rettede ikke en kendt fejl.
+    if (Math.abs(a.currentTime - vil) > 0.35) { try { a.currentTime = vil; } catch (e) {} }
     if (c.playing && a.paused) a.play().catch(() => {});
     if (!c.playing && !a.paused) a.pause();
   };
