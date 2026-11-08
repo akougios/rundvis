@@ -4888,12 +4888,19 @@ function Rundvis() {
 
                 <input
                   type="email" autoFocus placeholder="E-mail" value={email}
+                  name={opretter ? "ny-email" : "email"}
+                  autoComplete={opretter ? "off" : "username"}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full rounded-xl px-3 py-2.5 text-sm mb-2"
                   style={{ border: `1px solid ${LINE}`, backgroundColor: INK, color: TEXT }}
                 />
+                {/* new-password ved oprettelse: så foreslår browseren en ny i stedet for at
+                    fylde den gemte fra en anden konto ind. Navnene skifter med, fordi Chrome
+                    ellers kender feltet igen og udfylder det uanset autoComplete. */}
                 <input
                   type="password" placeholder="Adgangskode" value={kodeord}
+                  name={opretter ? "ny-adgangskode" : "adgangskode"}
+                  autoComplete={opretter ? "new-password" : "current-password"}
                   onChange={(e) => setKodeord(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") logInd(); }}
                   className="w-full rounded-xl px-3 py-2.5 text-sm mb-3"
@@ -4910,7 +4917,14 @@ function Rundvis() {
                   {portSender ? "Et øjeblik…" : opretter ? "Opret konto" : "Log ind"}
                 </button>
                 <button
-                  onClick={() => { setOpretter((v) => !v); setPortFejl(""); setPortBesked(""); }}
+                  onClick={() => {
+                    // Felterne ryddes ved skiftet. Stod man med sin egen mail og adgangskode
+                    // fra et login og trykkede "Opret én", var de stadig udfyldt — og så er
+                    // det nærliggende at trykke videre og oprette en konto der allerede findes.
+                    setOpretter((v) => !v);
+                    setEmail(""); setKodeord(""); setAftaleOk(false);
+                    setPortFejl(""); setPortBesked("");
+                  }}
                   className="w-full text-[11px]" style={{ color: MUTED }}
                 >
                   {opretter ? "Har du allerede en konto? Log ind" : "Ingen konto endnu? Opret én"}
