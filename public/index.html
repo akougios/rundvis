@@ -3293,6 +3293,26 @@ function Rundvis() {
 
   const runHighQuality = async (onlyIndexes) => {
     if (hqStatus === "working" || flythroughStills.length === 0) return;
+
+    // SIG DET MED DET SAMME.
+    //
+    // Porten afviste også før, men først når det første kald til Luma blev sendt — altså efter
+    // billederne var uploadet og mægleren havde ventet. Han fik at vide at han ikke måtte, på
+    // det tidspunkt hvor han troede det var i gang.
+    //
+    // maaOpgradere kommer fra /api/konto og er regnet ud med SAMME funktion som porten selv
+    // bruger, så der er ingen regler duplikeret her. Serveren bestemmer stadig; det her sparer
+    // bare ventetiden. Er profilen ikke hentet endnu, lader vi kaldet gå igennem og porten tage
+    // den — en manglende profil er ikke et nej.
+    if (profil && profil.loggetInd && profil.konto && profil.konto.maaOpgradere === false) {
+      kraevAdgang("abonnement");
+      return;
+    }
+    if (profil && !profil.loggetInd) {
+      kraevAdgang("login");
+      return;
+    }
+
     hqAfbrudtRef.current = false;
     setHqAfbrudt(false);
     hqStartTidRef.current = performance.now();

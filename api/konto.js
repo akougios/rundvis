@@ -2,7 +2,7 @@
 // planer man kan vælge. Ét kald frem for fire, fordi menuen åbnes og skal være udfyldt med det
 // samme — ikke fylde sig selv ud mens man kigger på den.
 
-import { brugerFraToken, kontoFor, supabaseErSat } from "./_konto.js";
+import { brugerFraToken, kontoFor, supabaseErSat, opgraderingsRet } from "./_konto.js";
 import { PLANER, FORDELE, stripeErSat } from "./_stripe.js";
 
 const sb = () => (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
@@ -110,6 +110,8 @@ export default async function handler(req, res) {
     ? new Date(new Date(konto.periode_slut).getTime() - 31 * 864e5).toISOString()
     : new Date(nu.getFullYear(), nu.getMonth(), 1).toISOString();
 
+  const ret = await opgraderingsRet(konto, null);
+
   res.status(200).json({
     loggetInd: true,
     email: bruger.email,
@@ -126,6 +128,16 @@ export default async function handler(req, res) {
       // siden kunden sagde ja.
       aftaleVersion: konto.aftale_version || null,
       aftaleMangler: (konto.aftale_version || null) !== AFTALE_VERSION,
+      // MAA DEN HER KONTO OPGRADERE, LIGE NU?
+      //
+      // Samme funktion som porten selv bruger, saa browseren ikke skal gaette reglerne - og
+      // ikke KAN gaette dem: hverken fri_adgang eller gratis_boliger staar i det den faar.
+      // Uden det her kunne knappen kun afvise paa status === "aktiv", og saa ville ejerne og
+      // testerne blive stoppet af deres egen app.
+      //
+      // Svaret er altid serverens. Det her sparer bare maegleren for at uploade tolv billeder
+      // og vente, foer han faar at vide at han ikke maatte.
+      maaOpgradere: ret.maa,
     },
   });
 }

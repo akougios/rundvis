@@ -133,6 +133,49 @@ export async function sikrBolig(kontoId, boligId, adresse) {
 // Rækkefølgen er med vilje: er Supabase slet ikke sat op, falder vi tilbage til den delte
 // adgangskode, så en halvfærdig opsætning ikke vælter en kørende deployment. Er Supabase sat
 // op, er login et krav — og abonnementet oveni, når kraevAbonnement er slået til.
+// MÅ DEN HER KONTO OPGRADERE?
+//
+// Ligger for sig selv, fordi to steder skal kunne spørge om det samme: porten i maaBruge, der
+// afviser et kald, og /api/konto, der fortæller browseren besked FØR mægleren trykker. Stod
+// reglerne kun i porten, ville browseren skulle gætte dem — og et gæt ville ramme ejerne og
+// testerne forkert, for hverken fri_adgang eller gratis_boliger står i det browseren får.
+//
+// boligId må gerne være null. Så spørges der "kunne du starte en ny bolig nu", hvilket er
+// præcis spørgsmålet når knappen tegnes.
+export async function opgraderingsRet(konto, boligId = null) {
+  if (!konto) return { maa: false, svar: { error: "Din bruger hører ikke til en konto.", needsSubscription: true } };
+  if (konto.fri_adgang) return { maa: true };
+
+  const stripeOppe = Boolean(process.env.STRIPE_SECRET_KEY);
+  if (stripeOppe && konto.abonnement_status === "aktiv") return { maa: true };
+
+  const gratis = Number(konto.gratis_boliger) || 0;
+  const brugt = await brugteBoliger(konto.id);
+  // En bolig der allerede er betalt for tæller ikke igen. Ellers blev en tester afbrudt
+  // midt i sin femte bolig, med halvdelen af billederne opgraderet.
+  const nyBolig = Boolean(boligId) && !brugt.has(boligId);
+  const efter = brugt.size + (nyBolig ? 1 : 0);
+  if (efter <= gratis) return { maa: true, gratis, brugt: brugt.size };
+
+  return {
+    maa: false,
+    gratis,
+    brugt: brugt.size,
+    svar: {
+      // Adressen SKAL staa i selve beskeden. Der stod "skriv til os" uden at sige hvem, og
+      // den besked moeder man praecis naar man har brugt sin sidste gratis bolig - altsaa
+      // paa det daarligste tidspunkt at sende nogen ud at lede.
+      error: gratis > 0
+        ? `Du har brugt dine ${gratis} gratis boliger. Skriv til ${KONTAKT_MAIL} for at fortsætte.`
+        : `Opgradering kræver et abonnement. Den gratis video kan du lave som du vil — skriv til ${KONTAKT_MAIL} hvis du vil høre mere.`,
+      needsSubscription: true,
+      status: konto.abonnement_status,
+      brugteBoliger: brugt.size,
+      gratisBoliger: gratis,
+    },
+  };
+}
+
 export async function maaBruge(req, res, { kraevAbonnement = true } = {}) {
   if (!supabaseErSat()) {
     const { allowedToSpend } = await import("./_access.js");
@@ -152,11 +195,7 @@ export async function maaBruge(req, res, { kraevAbonnement = true } = {}) {
     return null;
   }
 
-  // Abonnementet kræves kun når der FINDES en måde at tegne et på. Uden en Stripe-nøgle ville
-  // kravet låse alle ude af et produkt ingen kan betale for — og det slår sig selv til den dag
-  // nøglen sættes, i stedet for at afhænge af at nogen husker et flag.
-  const stripeOppe = Boolean(process.env.STRIPE_SECRET_KEY);
-
+  // Reglerne selv ligger i opgraderingsRet ovenfor, så browseren kan spørge om det samme.
   if (kraevAbonnement) {
     // RÆKKEFØLGEN ER PORTENS REGELSÆT, og den er med vilje sådan her:
     //
@@ -168,33 +207,8 @@ export async function maaBruge(req, res, { kraevAbonnement = true } = {}) {
     // Punkt fire er nyt og er hele pointen. Før stod der kun punkt to, og den gjaldt kun når
     // der FANDTES en Stripe-nøgle - så uden Stripe kunne enhver der var logget ind opgradere
     // frit. Hvert klip koster rigtige penge hos Luma, så der var ingen bund i det.
-    if (!konto.fri_adgang) {
-      const harAbonnement = stripeOppe && konto.abonnement_status === "aktiv";
-      if (!harAbonnement) {
-        const gratis = Number(konto.gratis_boliger) || 0;
-        const boligId = (req.body && req.body.boligId) || null;
-        const brugt = await brugteBoliger(konto.id);
-        // En bolig der allerede er betalt for tæller ikke igen. Ellers blev en tester afbrudt
-        // midt i sin femte bolig, med halvdelen af billederne opgraderet.
-        const nyBolig = Boolean(boligId) && !brugt.has(boligId);
-        const efter = brugt.size + (nyBolig ? 1 : 0);
-        if (efter > gratis) {
-          res.status(402).json({
-            // Adressen SKAL staa i selve beskeden. Der stod "skriv til os" uden at sige hvem, og
-            // den besked moeder man praecis naar man har brugt sin sidste gratis bolig - altsaa
-            // paa det daarligste tidspunkt at sende nogen ud at lede.
-            error: gratis > 0
-              ? `Du har brugt dine ${gratis} gratis boliger. Skriv til ${KONTAKT_MAIL} for at fortsætte.`
-              : `Opgradering kræver et abonnement. Den gratis video kan du lave som du vil — skriv til ${KONTAKT_MAIL} hvis du vil høre mere.`,
-            needsSubscription: true,
-            status: konto.abonnement_status,
-            brugteBoliger: brugt.size,
-            gratisBoliger: gratis,
-          });
-          return null;
-        }
-      }
-    }
+    const ret = await opgraderingsRet(konto, (req.body && req.body.boligId) || null);
+    if (!ret.maa) { res.status(402).json(ret.svar); return null; }
   }
 
   // Porten er passeret. Boligen skal findes i databasen før forbruget kan bogføres på den,
