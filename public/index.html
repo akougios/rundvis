@@ -2381,15 +2381,31 @@ function Rundvis() {
     if (opretter) {
       if (!aftaleOk) throw new Error("Sæt flueben ved databehandleraftalen for at oprette en konto.");
       try { localStorage.setItem("rundvis_aftale", AFTALE_VERSION); } catch (e) {}
-      const { error } = await k.auth.signUp({ email, password: kodeord });
+      const { data, error } = await k.auth.signUp({ email, password: kodeord });
       if (error) throw new Error(error.message);
       // Accepten skrives ned her hvis der kom en session med det samme. Kraever Supabase en
       // bekraeftelsesmail, er der ingen session endnu - saa skrives den ved foerste login,
       // fordi /api/konto sender aftaleMangler med tilbage og vi forsoeger igen.
       await gemAftale();
-      // Supabase kan være sat til at kræve en bekræftelsesmail. Sig det frem for at lade
-      // brugeren stå med en knap der tilsyneladende ikke gjorde noget.
-      setPortBesked("Konto oprettet. Tjek din mail hvis vi beder om en bekræftelse.");
+
+      // TILBAGE TIL LOGIN, OG SIG HVAD DER FAKTISK SKETE.
+      //
+      // Før stod brugeren tilbage på oprettelsesformularen med sin mail og adgangskode stadig
+      // i felterne og en besked der gættede ("tjek din mail HVIS vi beder om en bekræftelse").
+      // Det er to problemer: han ved ikke om han skal gøre noget, og han ved ikke hvor han
+      // logger ind.
+      //
+      // Svaret står i det Supabase sender tilbage. Kom der en session med, er kontoen klar med
+      // det samme. Kom der ingen, venter den på at mailen bliver bekræftet. Vi behøver ikke
+      // gætte — vi kan se det.
+      const skalBekraefte = !data || !data.session;
+      setOpretter(false);
+      setKodeord("");
+      setPortBesked(
+        skalBekraefte
+          ? `Konto oprettet. Vi har sendt en bekræftelsesmail til ${email}. Klik linket i mailen, og log så ind her.`
+          : "Konto oprettet. Log ind med din mail og adgangskode."
+      );
       return;
     }
     const { error } = await k.auth.signInWithPassword({ email, password: kodeord });
