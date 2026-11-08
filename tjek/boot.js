@@ -10,6 +10,15 @@
 // Containerens netværk når ikke CDN'erne, så React og Babel hentes fra npm og serveres lokalt,
 // og script-tags skrives om undervejs. Tailwind droppes helt — den er udseende, ikke funktion.
 //
+// MEN PAS PÅ MED AT GENBRUGE DEN HER OPSÆTNING TIL AT TESTE KLIK OG LAYOUT. Uden Tailwind
+// betyder `fixed inset-0` ingenting, så et overlay der skulle dække hele skærmen bliver en
+// almindelig blok på et par hundrede pixels. Jeg konkluderede engang at et baggrundsklik var
+// i stykker, fordi klikket landede ved siden af overlayet i stedet for på det.
+//
+// Skal der testes samspil, så indsæt en lille stilart med de klasser testen afhænger af:
+//   .fixed{position:fixed} .inset-0{top:0;right:0;bottom:0;left:0} .flex{display:flex}
+//   .items-center{align-items:center} .justify-center{justify-content:center} .w-full{width:100%}
+//
 //   node tjek/boot.js
 //
 // Afslutter med 0 hvis appen monterer og der ikke kastes noget, ellers 1.

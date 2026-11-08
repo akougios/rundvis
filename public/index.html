@@ -2260,6 +2260,8 @@ function Rundvis() {
   const [aftaleOk, setAftaleOk] = useState(false);
   const [portFejl, setPortFejl] = useState("");
   const [portBesked, setPortBesked] = useState("");
+  // Begyndte museklikket paa baggrunden? Se noten ved overlayet.
+  const nedPaaBaggrundRef = useRef(false);
   const [portSender, setPortSender] = useState(false);
   const [bruger, setBruger] = useState(null);
   // Indtil /api/config har svaret ved vi ikke om login findes. At vise "Log ind" imens og så
@@ -4772,12 +4774,25 @@ function Rundvis() {
       )}
 
       {/* Ét vindue, tre grunde. Det er altid samme øjeblik: nogen rakte efter opgraderingen og
-          måtte ikke. Gratis-versionen ser det aldrig. */}
+          måtte ikke. Gratis-versionen ser det aldrig.
+
+          LUKKER KUN HVIS KLIKKET BÅDE BEGYNDTE OG SLUTTEDE UDEN FOR BOKSEN. Her stod onClick
+          alene, og det lukkede vinduet midt i en markering: markerer man sin mailadresse og
+          trækker musen ud over kanten, sker mouseup på baggrunden, og browseren sender så et
+          click til den fælles forælder — altså overlayet. Boksen forsvandt mens man var i gang
+          med at rette sin egen indtastning.
+
+          At tjekke e.target alene rækker ikke: ved et træk UD er overlayet faktisk målet. Det
+          der adskiller de to tilfælde er hvor musen blev trykket NED. */}
       {port && (
         <div
           className="fixed inset-0 flex items-center justify-center px-5"
           style={{ backgroundColor: "rgba(23,27,26,0.45)", zIndex: 50 }}
-          onClick={() => setPort("")}
+          onMouseDown={(e) => { nedPaaBaggrundRef.current = e.target === e.currentTarget; }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && nedPaaBaggrundRef.current) setPort("");
+            nedPaaBaggrundRef.current = false;
+          }}
         >
           <div
             className="w-full rounded-2xl p-6"
