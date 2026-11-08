@@ -2191,6 +2191,7 @@ function Rundvis() {
   const clockRef = useRef({ playing: true, baseMs: 0, since: 0 });
   const [playing, setPlaying] = useState(true);   // for how the button looks
   const scrubRef = useRef(null);
+  const showTotalRef = useRef(0);
   const scrubBarRef = useRef(null);
 
   const filmNow = () => {
@@ -2746,7 +2747,7 @@ function Rundvis() {
     // færdigt. Flyttes eller fjernes et rum undervejs, peger de indekser på andre rum, og
     // køkkenets klip lander på soveværelset. Skærmen er låst imens, så det her er kun
     // bagstopperen.
-    if (hqStatus === "working") return;
+    if (hqStatus === "working" || hqStatus === "varmer") return;
     if (from === to || from < 0 || to < 0) return;
     if (from >= flythroughStills.length || to >= flythroughStills.length) return;
     setFlythroughStills((prev) => lift(prev, from, to));
@@ -2775,7 +2776,7 @@ function Rundvis() {
     // færdigt. Flyttes eller fjernes et rum undervejs, peger de indekser på andre rum, og
     // køkkenets klip lander på soveværelset. Skærmen er låst imens, så det her er kun
     // bagstopperen.
-    if (hqStatus === "working") return;
+    if (hqStatus === "working" || hqStatus === "varmer") return;
     const target = idx + dir;
     if (target < 0 || target >= flythroughStills.length) return;
     setFlythroughStills((prev) => swap(prev, idx, target));
@@ -2793,7 +2794,7 @@ function Rundvis() {
     // færdigt. Flyttes eller fjernes et rum undervejs, peger de indekser på andre rum, og
     // køkkenets klip lander på soveværelset. Skærmen er låst imens, så det her er kun
     // bagstopperen.
-    if (hqStatus === "working") return;
+    if (hqStatus === "working" || hqStatus === "varmer") return;
     if (flythroughStills.length <= 3) return; // three is the minimum a walkthrough is built from
     const drop = (arr) => arr.filter((_, i) => i !== idx);
     setFlythroughStills(drop);
@@ -3204,6 +3205,9 @@ function Rundvis() {
   // The scrubber is moved by writing to the element directly. Driving it from state would
   // re-render the whole page - thumbnails and all - on every frame, to move one bar.
   const showTotalMs = flythroughParams.reduce((a, sp) => a + sp.durationMs, 0);
+  // Laeses af opvarmningen efter en generering, som skal vide hvor lang filmen BLEV - altsaa
+  // efter planen er bygget om med klippene i, ikke den laengde den havde foer.
+  showTotalRef.current = showTotalMs;
   useEffect(() => {
     if (flythroughStatus !== "done" || !showTotalMs) return;
     let raf = 0, tæl = 0;
@@ -3330,7 +3334,7 @@ function Rundvis() {
     : [];
 
   const runHighQuality = async (onlyIndexes) => {
-    if (hqStatus === "working" || flythroughStills.length === 0) return;
+    if (hqStatus === "working" || hqStatus === "varmer" || flythroughStills.length === 0) return;
 
     // SIG DET MED DET SAMME.
     //
@@ -3517,12 +3521,35 @@ function Rundvis() {
         );
         setHqStatus(clips.some(Boolean) ? "done" : "error");
       } else {
-        setHqStatus("done");
-        // Afsløringen. Boksen går væk og det opgraderede står der — ikke en fane man selv skal
-        // finde bagefter.
+        // EN GENNEMKØRSEL BAG SLØRET, FØR DET VISES.
+        //
+        // Første gennemspilning er aldrig ren. Browseren afkoder hvert billede mens det spiller,
+        // og selv med opvarmningen i varmOpKlip sidder der hak og spring i den første runde.
+        // Anden runde kører glat, fordi alt er afkodet.
+        //
+        // Før faldt sløret væk i samme øjeblik som filmen startede, så mægleren så netop den
+        // dårlige runde — og det er det ene øjeblik hvor produktet skal se bedst ud.
+        //
+        // Nu starter filmen bag sløret, kører én gang igennem, og først dér falder sløret og
+        // uret stilles tilbage til nul. Han ser anden runde, fra begyndelsen.
+        setHqStatus("varmer");
         setShowSource("upgraded");
         setClock({ playing: true, baseMs: 0 });
         setPlaying(true);
+
+        const start = performance.now();
+        // Et øjeblik, så planen når at blive bygget om med klippene i. Læses længden med det
+        // samme, er det den gamle og kortere film vi venter på.
+        setTimeout(() => {
+          if (hqAfbrudtRef.current) { setHqStatus("done"); return; }
+          const total = showTotalRef.current || 20000;
+          const gaaet = performance.now() - start;
+          setTimeout(() => {
+            setClock({ playing: true, baseMs: 0 });
+            setPlaying(true);
+            setHqStatus("done");
+          }, Math.max(0, total - gaaet + 150));
+        }, 300);
       }
     } catch (err) {
       setHqError(err.message || "Genereringen fejlede.");
@@ -4762,19 +4789,22 @@ function Rundvis() {
           Men ikke en bar spinner. Ni minutters uoplyst venten læses som at siden er gået ned,
           og så lukker nogen fanen midt i noget de har betalt for. Derfor står der hvor langt
           der er, og hvor længe der er igen. */}
-      {hqStatus === "working" && (
+      {(hqStatus === "working" || hqStatus === "varmer") && (
         <div
           className="fixed inset-0 flex items-center justify-center px-5"
           style={{ backgroundColor: "rgba(23,27,26,0.82)", zIndex: 60, backdropFilter: "blur(10px)" }}
         >
           <div className="w-full text-center" style={{ maxWidth: 380 }}>
             <p className="font-display mb-2" style={{ fontSize: 28, color: "#fff" }}>
-              Videoen forbedres
+              {hqStatus === "varmer" ? "Gør klar" : "Videoen forbedres"}
             </p>
             <p className="text-sm mb-7" style={{ color: "rgba(255,255,255,0.62)" }}>
-              Kameraet sættes i bevægelse i hvert rum.
+              {hqStatus === "varmer"
+                ? "Filmen kører igennem én gang, så den er glat når du ser den."
+                : "Kameraet sættes i bevægelse i hvert rum."}
             </p>
 
+            {hqStatus === "working" && (<>
             <div className="w-full overflow-hidden mb-3"
                  style={{ height: 3, backgroundColor: "rgba(255,255,255,0.18)", borderRadius: 2 }}>
               <div ref={hqBjaelkeRef} style={{
@@ -4797,6 +4827,7 @@ function Rundvis() {
             >
               {hqAfbrudt ? "Stopper efter de igangværende rum…" : "Afbryd"}
             </button>
+            </>)}
           </div>
         </div>
       )}
