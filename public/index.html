@@ -2440,10 +2440,23 @@ function Rundvis() {
       const skalBekraefte = !data || !data.session;
       setOpretter(false);
       setKodeord("");
+
+      // KOM DER EN SESSION MED, ER HAN ALLEREDE LOGGET IND.
+      //
+      // onAuthStateChange har sat bruger i samme øjeblik signUp svarede, så kontoen er oprettet
+      // OG brugeren er inde. At lade boksen stå åben med "log ind med din mail og adgangskode"
+      // beder ham gøre noget der allerede er sket — han skriver det samme igen for at lande på
+      // den side han står på. Luk i stedet, som ved et almindeligt login.
+      //
+      // Det var en sjælden sti så længe Supabase krævede en bekræftelsesmail. Med "Confirm email"
+      // slået fra er det stien HVER gang, så den skal være rigtig.
+      if (!skalBekraefte) {
+        setPort("");
+        return;
+      }
+
       setPortBesked(
-        skalBekraefte
-          ? `Konto oprettet. Vi har sendt en bekræftelsesmail til ${email}. Klik linket i mailen, og log så ind her.`
-          : "Konto oprettet. Log ind med din mail og adgangskode."
+        `Konto oprettet. Vi har sendt en bekræftelsesmail til ${email}. Klik linket i mailen, og log så ind her.`
       );
       return;
     }
